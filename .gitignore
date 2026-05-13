@@ -22,6 +22,10 @@ chroma_db/
 # 离线安装包（体积大，不入库）
 knowledge_offline/
 
+# 构建缓存和产物
+build_cache/
+dist/
+
 # 聊天记录（用户隐私数据）
 chat_history/
 

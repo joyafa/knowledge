@@ -297,40 +297,41 @@ class RAGChain:
         # 过滤低相关度
         filtered = [r for r in vector_results if r["distance"] < threshold]
 
-        # 如果未启用混合检索，直接返回向量结果
-        if not enable_hybrid or len(filtered) < 2:
+        # BM25 检索（当向量结果不足时作为补充）
+        bm25_results = []
+        if enable_hybrid:
+            try:
+                self._ensure_bm25_ready()
+                if self._bm25:
+                    bm25_indices = self._bm25.search(query, top_k=top_k * 2)
+                    all_docs_for_bm25 = []
+                    collection_data = collection.get()
+                    if collection_data["documents"]:
+                        for i in range(len(collection_data["documents"])):
+                            all_docs_for_bm25.append({
+                                "content": collection_data["documents"][i],
+                                "metadata": collection_data["metadatas"][i] if collection_data["metadatas"] else {},
+                            })
+                    for idx, score in bm25_indices:
+                        if idx < len(all_docs_for_bm25):
+                            bm25_results.append({
+                                "content": all_docs_for_bm25[idx]["content"],
+                                "metadata": all_docs_for_bm25[idx]["metadata"],
+                                "bm25_score": score,
+                            })
+            except Exception as e:
+                logger.debug("BM25 检索跳过: %s", e)
+
+        # 融合结果
+        if filtered and bm25_results:
+            return reciprocal_rank_fusion(filtered, bm25_results)[:top_k]
+        elif filtered:
             return filtered[:top_k]
-
-        # BM25 检索
-        try:
-            self._ensure_bm25_ready()
-            if self._bm25:
-                bm25_indices = self._bm25.search(query, top_k=top_k * 2)
-                bm25_results = []
-                all_docs_for_bm25 = []
-                collection_data = collection.get()
-                if collection_data["documents"]:
-                    for i in range(len(collection_data["documents"])):
-                        all_docs_for_bm25.append({
-                            "content": collection_data["documents"][i],
-                            "metadata": collection_data["metadatas"][i] if collection_data["metadatas"] else {},
-                        })
-                for idx, score in bm25_indices:
-                    if idx < len(all_docs_for_bm25):
-                        bm25_results.append({
-                            "content": all_docs_for_bm25[idx]["content"],
-                            "metadata": all_docs_for_bm25[idx]["metadata"],
-                            "bm25_score": score,
-                        })
-
-                if bm25_results:
-                    # RRF 融合
-                    fused = reciprocal_rank_fusion(filtered, bm25_results)
-                    return fused[:top_k]
-        except Exception as e:
-            logger.debug("BM25 检索跳过: %s", e)
-
-        return filtered[:top_k]
+        elif bm25_results:
+            logger.info("向量检索无结果，使用 BM25 兜底（%d 条）", len(bm25_results))
+            return bm25_results[:top_k]
+        else:
+            return []
 
     def _rerank(self, query: str, results: list[dict]) -> list[dict]:
         """Cross-Encoder Reranker 二次精排。
@@ -512,7 +513,8 @@ class RAGChain:
                     yield {"status": "generating", "chunk": token}
             if not has_content:
                 raise RuntimeError("流式响应为空")
-        except Exception:
+        except Exception as stream_err:
+            logger.warning("流式调用失败，尝试非流式: %s", str(stream_err)[:200])
             try:
                 resp = self._client.chat.completions.create(
                     model=self._llm_cfg["model"],
@@ -531,7 +533,11 @@ class RAGChain:
                     yield {"status": "error", "message": err_msg}
                     return
             except Exception as e2:
-                err_msg = f"生成失败: {str(e2)}"
+                err_detail = str(e2)
+                # 提取 HTTP 状态码和 API 地址，帮助用户诊断
+                api_url = self._llm_cfg.get("api_base", "未知")
+                model = self._llm_cfg.get("model", "未知")
+                err_msg = f"LLM 调用失败\n\n> API: `{api_url}`\n> 模型: `{model}`\n> 错误: {err_detail}"
                 audit_log(username, "query", details=err_msg, query=question,
                           result_count=len(search_results),
                           duration_ms=(time.time() - start_time) * 1000)

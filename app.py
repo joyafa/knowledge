@@ -5,7 +5,6 @@
 
 import os
 import sys
-import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -15,50 +14,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from rag.config import get_config
 from rag.logging_config import setup_logging
+from rag.preload import start as start_preload, is_done, get_chain
 
 # 使用国内 HuggingFace 镜像
 os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
-# ── 后台预加载（使用可变容器避免 Streamlit rerun 重置） ──
-_preload_state: dict = {"chain": None, "error": None, "done": False}
-
-
-def _preload_chain():
-    """后台线程：预加载 RAGChain（主要是 embedding 模型）。"""
-    try:
-        from rag.chain import RAGChain
-        chain = RAGChain.from_config()
-        _preload_state["chain"] = chain
-    except Exception as e:
-        _preload_state["error"] = str(e)
-    finally:
-        _preload_state["done"] = True
-
 
 def init_session_state():
     """初始化 session_state。"""
-    # 主题
     if "theme" not in st.session_state:
         st.session_state.theme = get_config().ui.default_theme
-
-    # 消息
     if "messages" not in st.session_state:
         st.session_state.messages = []
-
-    # 页面
     if "page" not in st.session_state:
         st.session_state.page = "chat"
 
-    # 后台预加载（只启动一次）
-    if not _preload_state.get("started"):
-        _preload_state["started"] = True
-        t = threading.Thread(target=_preload_chain, daemon=True)
-        t.start()
+    # 启动后台预加载（幂等）
+    start_preload()
 
     # 从预加载获取 chain
-    if "chain" not in st.session_state and _preload_state["chain"] is not None:
-        st.session_state.chain = _preload_state["chain"]
-        st.session_state.chain_initialized = True
+    if "chain" not in st.session_state:
+        chain = get_chain()
+        if chain is not None:
+            st.session_state.chain = chain
+            st.session_state.chain_initialized = True
 
 
 def do_logout():
@@ -83,7 +62,6 @@ def main():
         initial_sidebar_state="expanded",
     )
 
-    # 应用主题
     from ui.theme import apply_theme
     apply_theme(st.session_state.get("theme", ui_cfg.default_theme))
 
@@ -92,19 +70,15 @@ def main():
 
     username = st.session_state.get("username", "")
 
-    # 未登录
     if not username:
-        from ui.login import render_login, render_login_screen
+        from ui.login import render_login_screen
         render_login_screen(config)
         return
 
-    # 已登录 — 侧边栏 + 主区域
     from ui.sidebar import render_sidebar
     render_sidebar(config)
 
-    # 主区域
     page = st.session_state.get("page", "chat")
-
     if page == "dashboard":
         _render_dashboard()
     else:
@@ -112,15 +86,12 @@ def main():
 
 
 def _render_chat_page(config):
-    """渲染对话页面。"""
     ui_cfg = config.ui
-
-    # 页面头部
     st.markdown(f"""
     <div style="padding: 12px 0 4px 0;">
-        <span style="font-size: 1.6em; font-weight: 700;">{ui_cfg.logo_text}</span>
-        <span style="font-size: 1.3em; font-weight: 600; margin-left: 8px;">{ui_cfg.title}</span>
-        <span style="color: #888; font-size: 0.8em; margin-left: 16px;">{ui_cfg.subtitle}</span>
+        <span style="font-size:1.6em;font-weight:700;">{ui_cfg.logo_text}</span>
+        <span style="font-size:1.3em;font-weight:600;margin-left:8px;">{ui_cfg.title}</span>
+        <span style="color:#888;font-size:0.8em;margin-left:16px;">{ui_cfg.subtitle}</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -129,7 +100,6 @@ def _render_chat_page(config):
 
 
 def _render_dashboard():
-    """渲染仪表盘页面。"""
     from services.analytics import get_dashboard_stats
     config = get_config()
 
@@ -143,15 +113,15 @@ def _render_dashboard():
     with st.spinner("正在加载统计数据..."):
         stats = get_dashboard_stats(days=7)
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("7天查询量", stats["total_queries"])
-    col2.metric("活跃用户", stats["unique_users"])
-    col3.metric("零结果查询", stats["no_result_count"])
-    col4.metric("平均延迟", f"{stats['avg_latency_ms']}ms")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("7天查询量", stats["total_queries"])
+    c2.metric("活跃用户", stats["unique_users"])
+    c3.metric("零结果查询", stats["no_result_count"])
+    c4.metric("平均延迟", f"{stats['avg_latency_ms']}ms")
 
-    col5, col6 = st.columns(2)
-    col5.metric("👍 好评", stats["total_feedback_positive"])
-    col6.metric("👎 差评", stats["total_feedback_negative"])
+    c5, c6 = st.columns(2)
+    c5.metric("👍 好评", stats["total_feedback_positive"])
+    c6.metric("👎 差评", stats["total_feedback_negative"])
 
     st.divider()
     st.markdown("### 日查询趋势")
@@ -163,22 +133,22 @@ def _render_dashboard():
         st.caption("暂无数据")
 
     st.divider()
-    c1, c2 = st.columns(2)
-    with c1:
+    a1, a2 = st.columns(2)
+    with a1:
         st.markdown("### 热门查询 Top 10")
         for item in stats.get("top_queries", []):
             st.markdown(f"- `{item['query']}` · **{item['count']}**次")
-    with c2:
+    with a2:
         st.markdown("### 知识库状态")
         try:
             from rag.vectorstore import VectorStore
             vs = VectorStore.from_config()
             s = vs.get_stats()
             st.success("✅ 向量库正常")
-            st.markdown(f"- **文档块**: {s['total_chunks']}")
-            st.markdown(f"- **文件数**: {s['total_files']}")
-            st.markdown(f"- **LLM**: `{config.llm.model}`")
-            st.markdown(f"- **Embedding**: `{config.embedding.model}`")
+            st.markdown(f"- 文档块: **{s['total_chunks']}**")
+            st.markdown(f"- 文件数: **{s['total_files']}**")
+            st.markdown(f"- LLM: `{config.llm.model}`")
+            st.markdown(f"- Embedding: `{config.embedding.model}`")
         except Exception as e:
             st.warning(f"向量库状态获取失败: {e}")
 

@@ -166,8 +166,14 @@ def render_sidebar(config):
             st.rerun()
 
         if st.button("🚪 断开连接", use_container_width=True):
-            from app import do_logout
-            do_logout()
+            # 安全退出：保留 chain 和 theme，清除用户状态
+            preserved = {}
+            for k in ("chain", "chain_initialized", "theme"):
+                if k in st.session_state:
+                    preserved[k] = st.session_state[k]
+            st.session_state.clear()
+            for k, v in preserved.items():
+                st.session_state[k] = v
             st.rerun()
 
         # ── 落款 ──

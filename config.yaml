@@ -1,0 +1,45 @@
+# API 智能助手配置文件
+# 支持 ${ENV_VAR} 和 ${ENV_VAR:-默认值} 环境变量替换
+
+llm:
+  api_base: "${LLM_API_BASE:-https://open.bigmodel.cn/api/paas/v4}"
+  api_key: "${LLM_API_KEY:-EMPTY}"
+  model: "glm-4-flash"
+  temperature: 0.3
+  max_tokens: 2048
+  context_window: 32768
+
+embedding:
+  model: "shibing624/text2vec-base-chinese"
+  local_path: ""
+
+vectorstore:
+  persist_directory: "./chroma_db"
+  collection_name: "knowledge_base"
+  top_k: 5
+  distance_threshold: 400
+
+knowledge:
+  docs_directory: "./knowledge"
+  chunk_size: 500
+  chunk_overlap: 50
+
+# 速率限制
+rate_limit:
+  enabled: true
+  max_requests_per_minute: 30
+  max_input_length: 2000
+
+# 多轮对话
+max_conversation_turns: 10
+
+# 审计日志
+audit_enabled: true
+
+# UI 自定义
+ui:
+  title: "诊断软件智能问答终端"
+  subtitle: "知识库检索 · 接口查询 · 参数说明 · 代码示例"
+  company_name: "南昌市星纬软件开发有限公司"
+  logo_text: "◈"
+  default_theme: "dark"

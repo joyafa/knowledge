@@ -1,0 +1,59 @@
+version: "3.8"
+
+services:
+  knowledge-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USE_MIRROR: "true"
+    image: knowledge-assistant:latest
+    container_name: knowledge-app
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
+      # LLM API 配置（通过环境变量覆盖 config.yaml）
+      - LLM_API_BASE=${LLM_API_BASE:-https://open.bigmodel.cn/api/paas/v4}
+      - LLM_API_KEY=${LLM_API_KEY:-EMPTY}
+    volumes:
+      # 知识库文档（宿主机目录映射，方便更新）
+      - ./knowledge:/app/knowledge
+      # 向量库持久化
+      - ./chroma_db:/app/chroma_db
+      # 聊天记录持久化
+      - ./chat_history:/app/chat_history
+      # 日志持久化
+      - ./logs:/app/logs
+      # 配置文件
+      - ./config.yaml:/app/config.yaml:ro
+    networks:
+      - knowledge-net
+
+  # 可选：如果使用本地 vLLM 服务
+  # vllm:
+  #   image: vllm/vllm-openai:latest
+  #   container_name: vllm-server
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8000:8000"
+  #   volumes:
+  #     - ./models:/models
+  #   command: >
+  #     --model /models/Qwen2.5-7B-Instruct
+  #     --served-model-name Qwen2.5-7B-Instruct
+  #     --max-model-len 32768
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   networks:
+  #     - knowledge-net
+
+networks:
+  knowledge-net:
+    driver: bridge

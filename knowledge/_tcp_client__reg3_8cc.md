@@ -1,0 +1,63 @@
+---
+title: muduo/net/tests/TcpClient_reg3.cc
+
+---
+
+# muduo/net/tests/TcpClient_reg3.cc
+
+
+
+## Functions
+
+|                | Name           |
+| -------------- | -------------- |
+| int | **[main](/_tcp_client__reg3_8cc.md#function-main)**(int argc, char * argv[]) |
+
+
+## Functions Documentation
+
+### function main
+
+```cpp
+int main(
+    int argc,
+    char * argv[]
+)
+```
+
+
+
+
+## Source code
+
+```cpp
+// TcpClient destructs in a different thread.
+
+#include "muduo/base/Logging.h"
+#include "muduo/net/EventLoopThread.h"
+#include "muduo/net/TcpClient.h"
+
+using namespace muduo;
+using namespace muduo::net;
+
+int main(int argc, char* argv[])
+{
+  Logger::setLogLevel(Logger::DEBUG);
+
+  EventLoopThread loopThread;
+  {
+  InetAddress serverAddr("127.0.0.1", 1234); // should succeed
+  TcpClient client(loopThread.startLoop(), serverAddr, "TcpClient");
+  client.connect();
+  CurrentThread::sleepUsec(500 * 1000);  // wait for connect
+  client.disconnect();
+  }
+
+  CurrentThread::sleepUsec(1000 * 1000);
+}
+```
+
+
+-------------------------------
+
+Updated on 2026-05-11 at 23:17:11 +0800

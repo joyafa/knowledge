@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 虚拟环境
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 环境变量
+.env
+
+# 向量数据库（本地生成，不入库）
+chroma_db/
+
+# 离线安装包（体积大，不入库）
+knowledge_offline/
+
+# 聊天记录（用户隐私数据）
+chat_history/
+
+# 日志
+logs/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# pytest
+.pytest_cache/

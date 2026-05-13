@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+*.egg
+
+# 虚拟环境
+venv/
+.venv/
+
+# 数据文件
+chroma_db/
+chat_history/
+logs/
+
+# 知识库文档（生产环境从外部挂载）
+knowledge_offline/
+
+# IDE
+.vscode/
+.idea/
+
+# 环境变量
+.env
+
+# 离线安装包
+*.zip
+
+# macOS
+.DS_Store
+
+# 临时文件
+*.tmp
+*.log

@@ -78,7 +78,7 @@ def create_session(username: str, title: str = "") -> str:
     sessions = list_sessions(username)
     sessions.append({
         "id": session_id,
-        "title": title or f"会话 {len(sessions) + 1}",
+        "title": title or "新会话",
         "created_at": now,
         "updated_at": now,
         "message_count": 0,
@@ -87,6 +87,29 @@ def create_session(username: str, title: str = "") -> str:
     _save_sessions(username, sessions)
     logger.info("创建会话: %s -> %s", username, session_id)
     return session_id
+
+
+def update_session_title(username: str, session_id: str, title: str):
+    """更新会话标题（如根据首次提问自动命名）。"""
+    sf = _sessions_file(username)
+    data = {"sessions": [], "active_session": session_id}
+    if sf.exists():
+        try:
+            old = json.loads(sf.read_text(encoding="utf-8"))
+            if isinstance(old, list):
+                data["sessions"] = old
+            else:
+                data = old
+        except Exception:
+            pass
+
+    for sess in data.get("sessions", []):
+        if sess["id"] == session_id:
+            sess["title"] = title[:30]  # 限制30字
+            sess["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            break
+
+    sf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def switch_session(session_id: str):

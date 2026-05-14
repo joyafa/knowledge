@@ -25,6 +25,7 @@ def render_sidebar(config):
     """渲染侧边栏。"""
     ui_cfg = config.ui
     username = st.session_state.get("username", "?")
+    is_admin = username in config.admin_users
 
     with st.sidebar:
         # ── Logo 区域 ──
@@ -41,7 +42,8 @@ def render_sidebar(config):
         # ── 用户区 ──
         c1, c2 = st.columns([3, 1])
         with c1:
-            st.markdown(f"**👤 {username}**")
+            admin_badge = " 🔰" if is_admin else ""
+            st.markdown(f"**👤 {username}{admin_badge}**")
         with c2:
             current_theme = st.session_state.get("theme", ui_cfg.default_theme)
             theme_label = "☀️" if current_theme == "dark" else "🌙"
@@ -77,7 +79,7 @@ def render_sidebar(config):
             new_id = create_session(username)
             switch_session(new_id)
             st.session_state.messages = []
-            st.session_state.history_loaded = False
+            st.session_state.pop("history_loaded", None)
             st.rerun()
 
         if sessions:
@@ -89,7 +91,7 @@ def render_sidebar(config):
                     if not is_active:
                         switch_session(sess["id"])
                         st.session_state.messages = []
-                        st.session_state.history_loaded = False
+                        st.session_state.pop("history_loaded", None)
                         st.rerun()
 
         st.markdown("---")
@@ -129,6 +131,8 @@ def render_sidebar(config):
                     label = date_str + (" · 今天" if date_str == datetime.now().strftime("%Y-%m-%d") else "")
                     with st.expander(label):
                         day_history = load_history_by_date(username, date_str)
+                        if not isinstance(day_history, list):
+                            day_history = []
                         for msg in day_history[-15:]:
                             role_icon = "▶" if msg["role"] == "user" else "◆"
                             st.caption(f"{role_icon} {msg.get('timestamp', '')}")
@@ -159,7 +163,7 @@ def render_sidebar(config):
 
         if st.button("🧹 清除会话", use_container_width=True):
             st.session_state.messages = []
-            st.session_state.history_loaded = False
+            st.session_state.pop("history_loaded", None)
             hf = get_today_history_file(username)
             if hf.exists():
                 hf.write_text("{}", encoding="utf-8")

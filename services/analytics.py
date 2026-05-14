@@ -1,6 +1,7 @@
 """分析仪表盘服务。
 
-从审计日志中提取统计数据：查询量、热门文档、API 用量等。
+从审计日志中提取统计数据：查询量、热门查询、API 用量等。
+默认只显示当前用户的数据，保护隐私。
 """
 
 import json
@@ -13,11 +14,12 @@ from rag.logging_config import AUDIT_DIR, get_logger
 logger = get_logger(__name__)
 
 
-def get_dashboard_stats(days: int = 7) -> dict:
+def get_dashboard_stats(days: int = 7, username: Optional[str] = None) -> dict:
     """获取仪表盘统计数据。
 
     Args:
         days: 统计最近几天的数据
+        username: 仅统计该用户的数据，None 表示全局（管理员视图）
 
     Returns:
         统计字典
@@ -32,6 +34,7 @@ def get_dashboard_stats(days: int = 7) -> dict:
         "daily_queries": {},
         "top_queries": [],
         "avg_latency_ms": 0,
+        "username": username or "全局",
     }
 
     query_counts: dict[str, int] = {}
@@ -44,7 +47,6 @@ def get_dashboard_stats(days: int = 7) -> dict:
         return _finalize_stats(stats, query_counts, result_counts, latencies)
 
     for log_file in sorted(AUDIT_DIR.glob("*.jsonl"), reverse=True):
-        # 解析日期
         try:
             file_date = datetime.strptime(log_file.stem, "%Y-%m-%d")
             if file_date < cutoff_date:
@@ -63,12 +65,17 @@ def get_dashboard_stats(days: int = 7) -> dict:
                     except json.JSONDecodeError:
                         continue
 
+                    entry_user = entry.get("username", "unknown")
+
+                    # 按用户过滤
+                    if username and entry_user != username:
+                        continue
+
                     action = entry.get("action", "")
 
                     if action == "query":
                         stats["total_queries"] += 1
-                        username = entry.get("username", "unknown")
-                        stats["unique_users"].add(username)
+                        stats["unique_users"].add(entry_user)
 
                         result_count = entry.get("result_count", 0)
                         result_counts.append(result_count)
@@ -79,12 +86,10 @@ def get_dashboard_stats(days: int = 7) -> dict:
                         if duration > 0:
                             latencies.append(duration)
 
-                        # 日统计
                         date_key = entry.get("timestamp", "")[:10]
                         if date_key:
                             stats["daily_queries"][date_key] = stats["daily_queries"].get(date_key, 0) + 1
 
-                        # 查询频次
                         query = entry.get("query", "")
                         if query:
                             query_counts[query] = query_counts.get(query, 0) + 1
@@ -105,22 +110,12 @@ def _finalize_stats(stats: dict, query_counts: dict, result_counts: list, latenc
     """计算汇总统计。"""
     stats["unique_users"] = len(stats["unique_users"])
 
-    # 平均结果数
     stats["avg_result_count"] = round(sum(result_counts) / len(result_counts), 1) if result_counts else 0
-
-    # 平均延迟
     stats["avg_latency_ms"] = round(sum(latencies) / len(latencies), 1) if latencies else 0
 
-    # Top 查询
     sorted_queries = sorted(query_counts.items(), key=lambda x: x[1], reverse=True)
     stats["top_queries"] = [{"query": q[:80], "count": c} for q, c in sorted_queries[:10]]
 
-    # 日查询序列
     stats["daily_queries"] = dict(sorted(stats["daily_queries"].items()))
 
     return stats
-
-
-def get_today_summary() -> dict:
-    """获取今日摘要。"""
-    return get_dashboard_stats(days=1)

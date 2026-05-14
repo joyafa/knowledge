@@ -111,6 +111,8 @@ class AppConfig(BaseModel):
     max_conversation_turns: int = Field(default=10, ge=0, le=50)
     # 审计日志
     audit_enabled: bool = True
+    # 管理员用户名列表
+    admin_users: list[str] = []
 
     @classmethod
     def from_yaml(cls, config_path: str = "config.yaml") -> "AppConfig":

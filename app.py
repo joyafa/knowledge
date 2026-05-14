@@ -102,20 +102,33 @@ def _render_chat_page(config):
 def _render_dashboard():
     from services.analytics import get_dashboard_stats
     config = get_config()
+    username = st.session_state.get("username", "")
+    is_admin = username in config.admin_users
 
-    if st.button("← 返回对话"):
-        st.session_state.page = "chat"
-        st.rerun()
+    # 顶栏：返回 + 管理员切换
+    col_back, col_toggle = st.columns([1, 5])
+    with col_back:
+        if st.button("← 返回对话"):
+            st.session_state.page = "chat"
+            st.rerun()
+    view_global = False
+    if is_admin:
+        with col_toggle:
+            view_global = st.checkbox("查看全局数据（所有用户）", key="dashboard_global")
 
-    st.markdown("## 📊 系统仪表盘")
-    st.caption("查询统计 · 用户活跃度 · 知识库状态")
-
+    # 根据视图加载数据
+    filter_user = None if view_global else username
     with st.spinner("正在加载统计数据..."):
-        stats = get_dashboard_stats(days=7)
+        stats = get_dashboard_stats(days=7, username=filter_user)
+
+    view_label = "全局仪表盘" if view_global else "我的仪表盘"
+    view_desc = "所有用户" if view_global else username
+    st.markdown(f"## 📊 {view_label}")
+    st.caption(f"查询统计 · {view_desc}")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("7天查询量", stats["total_queries"])
-    c2.metric("活跃用户", stats["unique_users"])
+    c2.metric("活跃用户" if view_global else "平均结果数", stats.get("unique_users", 0) if view_global else stats["avg_result_count"])
     c3.metric("零结果查询", stats["no_result_count"])
     c4.metric("平均延迟", f"{stats['avg_latency_ms']}ms")
 
@@ -135,7 +148,8 @@ def _render_dashboard():
     st.divider()
     a1, a2 = st.columns(2)
     with a1:
-        st.markdown("### 热门查询 Top 10")
+        label = "热门查询 Top 10" if view_global else "我的热门查询 Top 10"
+        st.markdown(f"### {label}")
         for item in stats.get("top_queries", []):
             st.markdown(f"- `{item['query']}` · **{item['count']}**次")
     with a2:
@@ -155,7 +169,6 @@ def _render_dashboard():
     st.divider()
     st.markdown("### 📥 导出")
     from services.history import export_session_markdown, get_active_session_id
-    username = st.session_state.get("username", "")
     session_id = get_active_session_id(username)
     md_content = export_session_markdown(username, session_id)
     st.download_button(

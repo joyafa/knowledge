@@ -12,6 +12,7 @@ from services.history import (
     load_session_history,
     save_message,
     get_active_session_id,
+    update_session_title,
 )
 
 
@@ -96,6 +97,10 @@ def _process_query(prompt: str, username: str, config):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     rate_cfg = config.rate_limit
 
+    # 防重复：如果最后一条消息就是当前 prompt，跳过
+    if st.session_state.messages and st.session_state.messages[-1].get("content") == prompt and st.session_state.messages[-1].get("role") == "user":
+        return
+
     if len(prompt) > rate_cfg.max_input_length:
         with st.chat_message("assistant"):
             st.error(f"输入过长（最大 {rate_cfg.max_input_length} 字符）")
@@ -109,13 +114,19 @@ def _process_query(prompt: str, username: str, config):
                 st.warning(msg)
             return
 
+    st.session_state.messages.append({"role": "user", "content": prompt, "timestamp": now_str})
     with st.chat_message("user"):
         st.caption(now_str)
         st.markdown(prompt)
-
-    st.session_state.messages.append({"role": "user", "content": prompt, "timestamp": now_str})
     session_id = get_active_session_id(username)
     save_message(username, prompt, role="user", timestamp=now_str, session_id=session_id)
+
+    # 首次提问时自动以问题内容命名会话
+    session_msgs = load_session_history(username, session_id)
+    user_msg_count = sum(1 for m in session_msgs if m.get("role") == "user")
+    if user_msg_count == 1:
+        short_title = prompt.strip()[:25] + ("..." if len(prompt.strip()) > 25 else "")
+        update_session_title(username, session_id, short_title)
 
     if not st.session_state.get("chain_initialized"):
         with st.chat_message("assistant"):
@@ -153,8 +164,8 @@ def _process_query(prompt: str, username: str, config):
                 elif status == "done":
                     sources_info = event.get("sources", [])
                     if not full_response:
-                        full_response = "知识库中暂无匹配内容，请确认文档已入库。"
-                        placeholder.warning(full_response)
+                        full_response = f"知识库中暂无与「{prompt[:50]}」相关的内容。\n\n请确认文档已入库，或尝试换一种问法。"
+                        placeholder.info(full_response)
                     else:
                         if sources_info:
                             src = "\n\n---\n**📖 参考来源：**\n"

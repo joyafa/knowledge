@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Optional
 
 import chromadb
-import yaml
 
+from rag.config import load_config
 from rag.embeddings import ChineseEmbeddingFunction
 from rag.loader import DocumentChunk
 from rag.logging_config import get_logger
@@ -19,37 +19,6 @@ logger = get_logger(__name__)
 # 全局缓存：避免每次创建新实例时重新加载 embedding 模型
 _cached_vectorstore: Optional["VectorStore"] = None
 _cached_config_key: Optional[str] = None
-
-
-def load_config(config_path: str = "config.yaml") -> dict:
-    """加载配置文件（兼容旧接口）。"""
-    from rag.config import get_config as get_app_config
-    config = get_app_config(config_path)
-    return {
-        "knowledge": {
-            "docs_directory": config.knowledge.docs_directory,
-            "chunk_size": config.knowledge.chunk_size,
-            "chunk_overlap": config.knowledge.chunk_overlap,
-        },
-        "embedding": {
-            "model": config.embedding.model,
-            "local_path": config.embedding.local_path,
-        },
-        "vectorstore": {
-            "persist_directory": config.vectorstore.persist_directory,
-            "collection_name": config.vectorstore.collection_name,
-            "top_k": config.vectorstore.top_k,
-            "distance_threshold": config.vectorstore.distance_threshold,
-        },
-        "llm": {
-            "api_base": config.llm.api_base,
-            "api_key": config.llm.api_key,
-            "model": config.llm.model,
-            "temperature": config.llm.temperature,
-            "max_tokens": config.llm.max_tokens,
-            "context_window": config.llm.context_window,
-        },
-    }
 
 
 class VectorStore:
@@ -76,7 +45,7 @@ class VectorStore:
         return self._client
 
     def _get_collection(self):
-        """获取或创建集合。"""
+        """获取或创建集合（内部使用，外部请用 get_collection）。"""
         if self._collection is None:
             client = self._get_client()
             self._collection = client.get_or_create_collection(
@@ -84,6 +53,27 @@ class VectorStore:
                 embedding_function=self._embedding_fn,
             )
         return self._collection
+
+    def get_collection(self):
+        """获取 ChromaDB 集合实例（公开接口）。"""
+        return self._get_collection()
+
+    def get_all_documents(self) -> list[dict]:
+        """获取向量库中所有文档块。
+
+        Returns:
+            [{"content": str, "metadata": dict}, ...]
+        """
+        collection = self._get_collection()
+        all_data = collection.get()
+        documents = []
+        if all_data["documents"] and all_data["metadatas"]:
+            for i in range(len(all_data["documents"])):
+                documents.append({
+                    "content": all_data["documents"][i],
+                    "metadata": all_data["metadatas"][i] if all_data["metadatas"] else {},
+                })
+        return documents
 
     def list_collections(self) -> list[str]:
         """列出所有集合名称（支持多知识库）。"""

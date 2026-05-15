@@ -61,6 +61,12 @@ class EmbeddingConfig(BaseModel):
     local_path: str = ""
 
 
+class RerankerConfig(BaseModel):
+    """Cross-Encoder Reranker 模型配置。"""
+    model: str = "BAAI/bge-reranker-base"
+    local_path: str = ""
+
+
 class VectorStoreConfig(BaseModel):
     """向量库配置。"""
     persist_directory: str = "./chroma_db"
@@ -95,14 +101,18 @@ class UIConfig(BaseModel):
     title: str = "智能知识库终端"
     subtitle: str = "知识库检索 · 接口查询 · 参数说明 · 代码示例"
     company_name: str = ""
+    company_url: str = ""
     logo_text: str = "◈"
     default_theme: str = Field(default="dark", pattern="^(dark|light)$")
 
 
 class AppConfig(BaseModel):
     """应用全局配置。"""
+    # 本地模型根目录（离线部署时设置环境变量 MODEL_ROOT）
+    model_root: str = "model"
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
+    reranker: RerankerConfig = Field(default_factory=RerankerConfig)
     vectorstore: VectorStoreConfig = Field(default_factory=VectorStoreConfig)
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
@@ -148,3 +158,41 @@ def reload_config(config_path: str = "config.yaml") -> AppConfig:
     global _config_instance
     _config_instance = AppConfig.from_yaml(config_path)
     return _config_instance
+
+
+def load_config(config_path: str = "config.yaml") -> dict:
+    """加载配置并转为字典（兼容需要 dict 的旧接口）。
+
+    推荐新代码直接使用 get_config() 返回的 Pydantic 对象。
+    """
+    config = get_config(config_path)
+    return {
+        "model_root": config.model_root,
+        "knowledge": {
+            "docs_directory": config.knowledge.docs_directory,
+            "chunk_size": config.knowledge.chunk_size,
+            "chunk_overlap": config.knowledge.chunk_overlap,
+        },
+        "embedding": {
+            "model": config.embedding.model,
+            "local_path": config.embedding.local_path,
+        },
+        "reranker": {
+            "model": config.reranker.model,
+            "local_path": config.reranker.local_path,
+        },
+        "vectorstore": {
+            "persist_directory": config.vectorstore.persist_directory,
+            "collection_name": config.vectorstore.collection_name,
+            "top_k": config.vectorstore.top_k,
+            "distance_threshold": config.vectorstore.distance_threshold,
+        },
+        "llm": {
+            "api_base": config.llm.api_base,
+            "api_key": config.llm.api_key,
+            "model": config.llm.model,
+            "temperature": config.llm.temperature,
+            "max_tokens": config.llm.max_tokens,
+            "context_window": config.llm.context_window,
+        },
+    }

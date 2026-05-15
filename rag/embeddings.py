@@ -4,10 +4,8 @@
 """
 
 import os
+from pathlib import Path
 from typing import Optional
-
-# 使用国内 HuggingFace 镜像，避免下载超时
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 from chromadb.api.types import EmbeddingFunction, Documents
 
@@ -29,12 +27,17 @@ class ChineseEmbeddingFunction(EmbeddingFunction):
         self._model: Optional[object] = None
 
     def _get_model(self):
-        """延迟加载模型，带进度提示。"""
+        """延迟加载模型，带进度提示。支持离线本地加载。"""
         if self._model is None:
             from sentence_transformers import SentenceTransformer
             logger.info("正在加载 Embedding 模型: %s", self._model_name)
-            logger.info("（首次运行需下载模型约 400MB，请耐心等待...）")
-            self._model = SentenceTransformer(self._model_name)
+            if self._model_name and Path(self._model_name).exists():
+                # 本地路径：离线加载，禁止联网
+                logger.info("（从本地路径离线加载）")
+                self._model = SentenceTransformer(self._model_name, local_files_only=True)
+            else:
+                logger.info("（首次运行需下载模型约 400MB，请耐心等待...）")
+                self._model = SentenceTransformer(self._model_name)
             logger.info("Embedding 模型加载完成。")
         return self._model
 

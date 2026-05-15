@@ -6,6 +6,7 @@
 import time
 from typing import Any
 
+from rag import __version__
 from rag.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -75,5 +76,5 @@ def get_health_status() -> dict[str, Any]:
             "vectorstore": vs_status,
             "embedding": emb_status,
         },
-        "version": "0.8.17",
+        "version": __version__,
     }

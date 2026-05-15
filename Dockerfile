@@ -1,14 +1,16 @@
-# 知识库智能助手 Docker 镜像
-FROM python:3.11-slim
+# 知识库智能助手 Docker 镜像（多阶段构建）
+# 阶段 1: 构建依赖
+FROM python:3.11-slim AS builder
 
 LABEL maintainer="knowledge-team"
 LABEL description="企业级 RAG 知识库智能问答系统"
 
-# 设置工作目录
 WORKDIR /app
 
-# 安装系统依赖
+# 安装构建依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -16,19 +18,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG USE_MIRROR=false
 ENV HF_ENDPOINT="https://hf-mirror.com"
 
-# 复制依赖文件
+# 复制依赖文件并安装
 COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
 
-# 安装 Python 依赖
-RUN pip install --no-cache-dir -r requirements.txt
+# ── 阶段 2: 运行时镜像 ──
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# 安装运行时系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 创建非 root 用户
+RUN groupadd -r knowledge && useradd -r -g knowledge -d /app -s /bin/bash knowledge
+
+# 设置国内镜像
+ENV HF_ENDPOINT="https://hf-mirror.com"
+
+# 从构建阶段复制已安装的 Python 包
+COPY --from=builder /root/.local /usr/local
 
 # 复制项目代码
-COPY . .
+COPY --chown=knowledge:knowledge . .
 
-# 创建必要目录
-RUN mkdir -p logs/audit chat_history chroma_db
+# 创建必要目录并设置权限
+RUN mkdir -p logs/audit chat_history chroma_db && \
+    chown -R knowledge:knowledge /app
 
-# 暴露 Streamlit 端口
+# 切换到非 root 用户
+USER knowledge
+
+# 暴露端口
 EXPOSE 8501
 
 # 健康检查

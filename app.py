@@ -55,9 +55,13 @@ def main():
     config = get_config()
     ui_cfg = config.ui
 
+    # 浏览器标签页图标：优先使用 logo.png，回退到文字
+    _logo_path = Path(__file__).resolve().parent / "logo.png"
+    _page_icon = str(_logo_path) if _logo_path.exists() else ui_cfg.logo_text
+
     st.set_page_config(
         page_title=ui_cfg.title,
-        page_icon=ui_cfg.logo_text,
+        page_icon=_page_icon,
         layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -87,9 +91,10 @@ def main():
 
 def _render_chat_page(config):
     ui_cfg = config.ui
+    from ui import render_logo_img
     st.markdown(f"""
     <div style="padding: 12px 0 4px 0;">
-        <span style="font-size:1.6em;font-weight:700;">{ui_cfg.logo_text}</span>
+        {render_logo_img(width=48)}
         <span style="font-size:1.3em;font-weight:600;margin-left:8px;">{ui_cfg.title}</span>
         <span style="color:#888;font-size:0.8em;margin-left:16px;">{ui_cfg.subtitle}</span>
     </div>

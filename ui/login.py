@@ -1,6 +1,9 @@
 """登录页面模块。"""
 
+from datetime import datetime
+
 import streamlit as st
+from ui import render_logo_img
 
 
 def render_login_screen(config=None):
@@ -36,8 +39,8 @@ def render_login_screen(config=None):
 
         st.markdown(f"""
         <div style="text-align:center;">
-            <div style="font-size:3em; margin-bottom:8px;">◈</div>
-            <h2 style="margin:0 0 4px 0;">{ui_cfg.title}</h2>
+            {render_logo_img(width=96)}
+            <h2 style="margin:8px 0 4px 0;">{ui_cfg.title}</h2>
             <p style="color:#888; margin:0 0 32px 0; font-size:0.9em;">{ui_cfg.subtitle}</p>
         </div>
         """, unsafe_allow_html=True)
@@ -56,9 +59,12 @@ def render_login_screen(config=None):
                 st.warning("用户名不能为空")
 
         if ui_cfg.company_name:
+            copyright_text = f"© {datetime.now().year} {ui_cfg.company_name}"
+            if ui_cfg.company_url:
+                copyright_text += f" | {ui_cfg.company_url}"
             st.markdown(f"""
-            <div style="text-align:center; margin-top:40px; color:#666; font-size:0.75em;">
-                {ui_cfg.company_name}
+            <div style="text-align:center; margin-top:40px; color:#888; font-size:0.75em;">
+                {copyright_text}
             </div>
             """, unsafe_allow_html=True)
 

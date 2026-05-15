@@ -124,13 +124,14 @@ def build_linux(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir: 
     else:
         print("  警告: 未找到模型文件")
 
-    # 修改 config.yaml 指向安装后的绝对路径
+    # 修改 config.yaml 指向安装后的绝对路径（embedding + reranker）
     config_file = app_dir / "config.yaml"
     import yaml
     if config_file.exists():
         with open(config_file, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
-        config["embedding"]["local_path"] = "/opt/knowledge-assistant/model"
+        config["embedding"]["local_path"] = "/opt/knowledge-assistant/model/embedding"
+        config["reranker"]["local_path"] = "/opt/knowledge-assistant/model/reranker"
         config["vectorstore"]["persist_directory"] = "/var/lib/knowledge-assistant/chroma_db"
         config["knowledge"]["docs_directory"] = "/var/lib/knowledge-assistant/knowledge"
         with open(config_file, "w", encoding="utf-8") as f:

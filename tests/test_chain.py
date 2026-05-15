@@ -40,11 +40,12 @@ class TestBM25Retriever:
     def test_no_match(self):
         bm25 = BM25Retriever()
         docs = [
-            {"content": "网络编程相关内容", "metadata": {}},
+            {"content": "网络编程 TCP 套接字实现", "metadata": {}},
         ]
         bm25.index(docs)
 
-        results = bm25.search("完全不相关的查询")
+        # 查询词与文档完全无交集
+        results = bm25.search("量子力学 薛定谔方程")
         assert results == []
 
     def test_multiple_term_query(self):
@@ -67,7 +68,7 @@ class TestReciprocalRankFusion:
     """RRF 融合算法测试。"""
 
     def test_basic_fusion(self):
-        # 使用相同的 dict 对象确保 id() 去重生效
+        # 内容哈希去重：相同内容的 doc 在不同列表中会被正确去重
         doc_a = {"content": "doc A", "id": 1}
         doc_b = {"content": "doc B", "id": 2}
         doc_c = {"content": "doc C", "id": 3}

@@ -112,9 +112,15 @@ def update_session_title(username: str, session_id: str, title: str):
     sf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def switch_session(session_id: str):
-    """切换活跃会话（仅更新活跃标记）。"""
-    username = _get_username_from_state()
+def switch_session(session_id: str, username: str = ""):
+    """切换活跃会话（仅更新活跃标记）。
+
+    Args:
+        session_id: 目标会话 ID
+        username: 用户名（可选，不传则从 Streamlit session_state 获取）
+    """
+    if not username:
+        username = _get_username_from_state() or ""
     if not username:
         return
     sf = _sessions_file(username)

@@ -4,64 +4,52 @@
 支持多轮对话、混合检索（向量+BM25）、Cross-Encoder Reranker。
 """
 
+import hashlib
+import re
 import time
+from pathlib import Path
 from typing import Generator, Optional
 
-import yaml
+import jieba
 from openai import OpenAI
 
+from rag.config import load_config
 from rag.vectorstore import VectorStore
 from rag.logging_config import get_logger, audit_log
 
 logger = get_logger(__name__)
 
 
-def load_config(config_path: str = "config.yaml") -> dict:
-    """加载配置文件（兼容旧接口）。"""
-    from rag.config import get_config as get_app_config
-    config = get_app_config(config_path)
-    return {
-        "knowledge": {
-            "docs_directory": config.knowledge.docs_directory,
-            "chunk_size": config.knowledge.chunk_size,
-            "chunk_overlap": config.knowledge.chunk_overlap,
-        },
-        "embedding": {
-            "model": config.embedding.model,
-            "local_path": config.embedding.local_path,
-        },
-        "vectorstore": {
-            "persist_directory": config.vectorstore.persist_directory,
-            "collection_name": config.vectorstore.collection_name,
-            "top_k": config.vectorstore.top_k,
-            "distance_threshold": config.vectorstore.distance_threshold,
-        },
-        "llm": {
-            "api_base": config.llm.api_base,
-            "api_key": config.llm.api_key,
-            "model": config.llm.model,
-            "temperature": config.llm.temperature,
-            "max_tokens": config.llm.max_tokens,
-            "context_window": config.llm.context_window,
-        },
-    }
+SYSTEM_PROMPT = """你是一个知识库问答机器人。你的回答**必须且只能**基于下方「知识库内容」。
 
+---
 
-SYSTEM_PROMPT = """你是一个团队内部的 API 知识库助手。你必须严格遵守以下规则：
+## 🚨 刚性格式要求（不遵守 = 回答无效）
 
-## 核心规则
-1. **只能**根据下方提供的「知识库内容」回答问题，禁止使用你自身的知识储备
-2. 如果知识库内容不足以回答问题，必须明确回复："抱歉，知识库中暂无相关内容，无法回答该问题。"
-3. 绝对不要编造、推测或补充任何知识库中没有的信息
+你的回答**必须**以以下两种格式之一开头，否则你的回答将被系统丢弃：
 
-## 回答格式
-- 回答时引用具体的来源文档路径
-- 使用简体中文回答
-- 如果包含代码，使用正确的 markdown 代码块格式（```cpp 等）
+**格式 A — 可以回答时：**
+【知识库回答】
+（在这里写你的回答，必须引用下方知识库中的具体文档来源）
+
+**格式 B — 无法回答时：**
+【拒绝回答】
+抱歉，知识库中暂无相关内容，无法回答该问题。
+
+---
+
+## 重要规则
+
+- 如果知识库内容与用户问题主题相关 → 用格式 A，从知识库内容中提取信息组织答案
+- 如果知识库内容与用户问题主题完全无关 → 用格式 B，只输出那一句话
+- **绝对禁止**输出格式 A/B 之外的任何内容
+- **绝对禁止**使用你自身的知识储备，你只是一个知识库内容的复述者
+- 知识库内容是 API 参考文档，从中提取接口、参数、代码即可
+
+---
 
 ## 知识库内容
 {context}"""
-
 
 # ── 简单 BM25 关键词检索 ──
 
@@ -71,6 +59,9 @@ class BM25Retriever:
     对 Corpus 中文档块进行索引，支持关键词搜索。
     使用经典 BM25 公式：得分 = IDF × TF × (k1+1) / (TF + k1×(1-b+b×doc_len/avg_doc_len))
     """
+
+    # 分词器版本——改分词逻辑后递增此值，强制重建索引
+    TOKENIZER_VERSION = 2
 
     def __init__(self, k1: float = 1.5, b: float = 0.75):
         self.k1 = k1
@@ -101,10 +92,18 @@ class BM25Retriever:
         self._built = True
 
     def _tokenize(self, text: str) -> list[str]:
-        """简易中文分词。"""
-        import re
-        # 提取中文字符、英文单词、数字
-        tokens = re.findall(r'[\u4e00-\u9fff]+|[a-zA-Z_]\w*|\d+', text.lower())
+        """中文分词（jieba）+ 英文/数字提取。"""
+        tokens = []
+        for word in jieba.lcut(text):
+            word = word.strip().lower()
+            if not word:
+                continue
+            # 包含中文 → 直接作为 token
+            if re.search(r'[\u4e00-\u9fff]', word):
+                tokens.append(word)
+            else:
+                # 纯英文/数字/混合 → 拆分单词和数字
+                tokens.extend(re.findall(r'[a-zA-Z_]\w*|\d+', word))
         return tokens
 
     def search(self, query: str, top_k: int = 10) -> list[tuple[int, float]]:
@@ -151,34 +150,40 @@ class BM25Retriever:
 
 # ── Reciprocal Rank Fusion ──
 
+def _doc_hash(doc: dict) -> str:
+    """计算文档内容哈希，用于跨检索源去重。"""
+    return hashlib.md5(doc.get("content", "").encode()).hexdigest()
+
+
 def reciprocal_rank_fusion(
     vector_results: list[dict],
     bm25_results: list[dict],
-    k: int = 60,
+    k: int = 10,
 ) -> list[dict]:
     """RRF 融合向量检索和 BM25 检索结果。
 
     RRF_score(d) = Σ 1/(k + rank_i(d))
+    使用内容哈希去重，避免不同检索源返回的相同文档被重复计算。
     """
-    scores: dict[int, float] = {}
-    doc_map: dict[int, dict] = {}
+    scores: dict[str, float] = {}
+    doc_map: dict[str, dict] = {}
 
     # 向量检索排名
     for rank, doc in enumerate(vector_results):
-        doc_id = id(doc)
-        doc_map[doc_id] = doc
-        scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank + 1)
+        doc_key = _doc_hash(doc)
+        doc_map[doc_key] = doc
+        scores[doc_key] = scores.get(doc_key, 0) + 1.0 / (k + rank + 1)
 
     # BM25 检索排名
     for rank, doc in enumerate(bm25_results):
-        doc_id = id(doc)
-        if doc_id not in doc_map:
-            doc_map[doc_id] = doc
-        scores[doc_id] = scores.get(doc_id, 0) + 1.0 / (k + rank + 1)
+        doc_key = _doc_hash(doc)
+        if doc_key not in doc_map:
+            doc_map[doc_key] = doc
+        scores[doc_key] = scores.get(doc_key, 0) + 1.0 / (k + rank + 1)
 
     # 按 RRF 分数排序
-    sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
-    return [doc_map[doc_id] for doc_id in sorted_ids]
+    sorted_keys = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
+    return [doc_map[key] for key in sorted_keys]
 
 
 class RAGChain:
@@ -187,11 +192,15 @@ class RAGChain:
     支持：
     - 多轮对话（自动注入对话历史）
     - 混合检索（向量 + BM25 + RRF 融合）
-    - Cross-Encoder Reranker（可选）
+    - Cross-Encoder Reranker（可选，类级别缓存）
     - 查询改写（可选）
     """
 
     CHARS_PER_TOKEN = 1.5
+
+    # 类级别缓存：避免每次查询都重新加载 Reranker 模型
+    _reranker_model: Optional[object] = None
+    _reranker_model_name: Optional[str] = None
 
     def __init__(self, vectorstore: VectorStore, config: dict):
         self._vectorstore = vectorstore
@@ -208,28 +217,30 @@ class RAGChain:
         self._bm25: Optional[BM25Retriever] = None
         # 最近一次检索的原始结果（用于 BM25 索引复用）
         self._last_doc_count: int = 0
+        # 记录 BM25 索引构建时的分词器版本
+        self._bm25_tokenizer_version: int = 0
 
     def _ensure_bm25_ready(self):
-        """确保 BM25 检索器与向量库同步。"""
+        """确保 BM25 检索器与向量库同步。
+
+        文档数变化或分词器版本升级时自动重建索引。
+        """
         current_count = self._vectorstore.get_document_count()
-        if self._bm25 is not None and current_count == self._last_doc_count:
+        need_rebuild = (
+            self._bm25 is None
+            or current_count != self._last_doc_count
+            or self._bm25_tokenizer_version != BM25Retriever.TOKENIZER_VERSION
+        )
+        if not need_rebuild:
             return
 
         logger.info("重建 BM25 索引 (%d 个文档块)...", current_count)
-        collection = self._vectorstore._get_collection()
-        # 获取所有文档块
         try:
-            all_data = collection.get()
-            documents = []
-            if all_data["documents"] and all_data["metadatas"]:
-                for i in range(len(all_data["documents"])):
-                    documents.append({
-                        "content": all_data["documents"][i],
-                        "metadata": all_data["metadatas"][i] if all_data["metadatas"] else {},
-                    })
+            documents = self._vectorstore.get_all_documents()
             self._bm25 = BM25Retriever()
             self._bm25.index(documents)
             self._last_doc_count = current_count
+            self._bm25_tokenizer_version = BM25Retriever.TOKENIZER_VERSION
             logger.info("BM25 索引构建完成")
         except Exception as e:
             logger.warning("BM25 索引构建失败: %s", e)
@@ -275,13 +286,13 @@ class RAGChain:
         """
         if top_k is None:
             top_k = self._vs_cfg.get("top_k", 5)
-        threshold = self._vs_cfg.get("distance_threshold", 600)
+        threshold = self._vs_cfg.get("distance_threshold", 10000)
 
-        # 向量检索
+        # 向量检索（扩大候选集，给 BM25 单边高分文档更多融合机会）
         embedding_fn = self._vectorstore._embedding_fn
         query_embedding = embedding_fn([query])
-        collection = self._vectorstore._get_collection()
-        results = collection.query(query_embeddings=query_embedding, n_results=max(top_k * 2, 10))
+        collection = self._vectorstore.get_collection()
+        results = collection.query(query_embeddings=query_embedding, n_results=max(top_k * 3, 30))
 
         if not results["documents"] or not results["documents"][0]:
             return []
@@ -304,14 +315,7 @@ class RAGChain:
                 self._ensure_bm25_ready()
                 if self._bm25:
                     bm25_indices = self._bm25.search(query, top_k=top_k * 2)
-                    all_docs_for_bm25 = []
-                    collection_data = collection.get()
-                    if collection_data["documents"]:
-                        for i in range(len(collection_data["documents"])):
-                            all_docs_for_bm25.append({
-                                "content": collection_data["documents"][i],
-                                "metadata": collection_data["metadatas"][i] if collection_data["metadatas"] else {},
-                            })
+                    all_docs_for_bm25 = self._vectorstore.get_all_documents()
                     for idx, score in bm25_indices:
                         if idx < len(all_docs_for_bm25):
                             bm25_results.append({
@@ -324,7 +328,16 @@ class RAGChain:
 
         # 融合结果
         if filtered and bm25_results:
-            return reciprocal_rank_fusion(filtered, bm25_results)[:top_k]
+            fused = reciprocal_rank_fusion(filtered, bm25_results)[:top_k]
+            # 融合后不足 top_k，用 BM25 不在 fused 中的结果补齐
+            if len(fused) < top_k:
+                fused_hashes = {_doc_hash(d) for d in fused}
+                for doc in bm25_results:
+                    if len(fused) >= top_k:
+                        break
+                    if _doc_hash(doc) not in fused_hashes:
+                        fused.append(doc)
+            return fused
         elif filtered:
             return filtered[:top_k]
         elif bm25_results:
@@ -337,17 +350,34 @@ class RAGChain:
         """Cross-Encoder Reranker 二次精排。
 
         使用本地轻量 reranker 模型对检索结果重排序。
+        模型在类级别缓存，避免每次查询重新加载。
+        支持从配置的 local_path 离线加载，否则从 HuggingFace 在线下载。
         """
         if len(results) <= 1:
             return results
 
         try:
-            from sentence_transformers import CrossEncoder
-            model_name = "BAAI/bge-reranker-base"
-            logger.debug("正在加载 Reranker 模型: %s", model_name)
-            reranker = CrossEncoder(model_name)
+            reranker_cfg = self._config.get("reranker", {})
+            reranker_model_name = reranker_cfg.get("model", "BAAI/bge-reranker-base")
+            reranker_local_path = reranker_cfg.get("local_path", "")
+
+            # 有本地路径且存在则离线加载，否则用 HuggingFace 模型名在线加载
+            use_local = bool(reranker_local_path and Path(reranker_local_path).exists())
+            resolved = reranker_local_path if use_local else reranker_model_name
+
+            # 类级别缓存：只在首次或路径变化时加载
+            if (RAGChain._reranker_model is None or
+                    RAGChain._reranker_model_name != resolved):
+                from sentence_transformers import CrossEncoder
+                logger.debug("正在加载 Reranker 模型: %s", resolved)
+                if use_local:
+                    logger.debug("（从本地路径离线加载）")
+                RAGChain._reranker_model = CrossEncoder(resolved)
+                RAGChain._reranker_model_name = resolved
+                logger.debug("Reranker 模型加载完成（已缓存）")
+
             pairs = [[query, r["content"]] for r in results]
-            scores = reranker.predict(pairs)
+            scores = RAGChain._reranker_model.predict(pairs)
             for i, score in enumerate(scores):
                 results[i]["rerank_score"] = float(score)
             results.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
@@ -357,10 +387,25 @@ class RAGChain:
 
         return results
 
-    def _build_context(self, search_results: list[dict], budget_tokens: int) -> str:
-        """将检索结果拼接为上下文字符串，自动裁剪以适配上下文窗口。"""
+    def _build_context(self, search_results: list[dict], budget_tokens: int, low_confidence: bool = False) -> str:
+        """将检索结果拼接为上下文字符串，自动裁剪以适配上下文窗口。
+
+        Args:
+            search_results: 检索结果列表
+            budget_tokens: token 预算
+            low_confidence: 是否为低置信度匹配（最佳结果距离 > 0.5）
+        """
         context_parts = []
-        used_tokens = 0
+
+        # 低置信度时在最前面插入强提醒
+        if low_confidence:
+            context_parts.append(
+                "⚠️ 【系统提示】以下知识库内容与用户问题的相关性**较低**（语义距离较大）。"
+                "如果内容确实与问题无关，你必须回复「抱歉，知识库中暂无相关内容，无法回答该问题。」，"
+                "绝对不要自行回答！"
+            )
+
+        used_tokens = self._estimate_tokens("\n\n---\n\n".join(context_parts)) if context_parts else 0
 
         for i, result in enumerate(search_results, 1):
             source = result["metadata"].get("source", "未知来源")
@@ -475,9 +520,15 @@ class RAGChain:
             return
 
         if not search_results:
+            # 知识库无匹配 → 直接返回提示，不再调用 LLM
+            logger.info("查询: %s → 知识库无匹配", question[:50])
             duration_ms = (time.time() - start_time) * 1000
-            audit_log(username, "query", details="无匹配结果", query=question,
-                      result_count=0, duration_ms=duration_ms)
+            audit_log(username, "query",
+                      details="知识库无匹配",
+                      query=question,
+                      answer_preview="",
+                      result_count=0,
+                      duration_ms=duration_ms)
             yield {"status": "done", "sources": []}
             return
 
@@ -486,7 +537,11 @@ class RAGChain:
             search_results = self._rerank(question, search_results)
 
         budget = self._calc_context_budget(question, history)
-        context = self._build_context(search_results, budget)
+        # 低置信度检测（仅在嵌入归一化后生效，距离范围 [0,4]）
+        # TODO: 执行 clear_db + ingest 重建归一化向量库后，改为 top_distance > 0.5
+        top_distance = search_results[0].get("distance", 999) if search_results else 999
+        low_confidence = top_distance > 5000  # 未归一化嵌入用高阈值，暂不触发
+        context = self._build_context(search_results, budget, low_confidence=low_confidence)
         sources = self._build_sources(search_results)
         messages = self._build_messages(context, question, history)
 
@@ -494,35 +549,16 @@ class RAGChain:
 
         yield {"status": "generating", "chunk": ""}
 
-        # 流式调用 LLM
+        # 流式调用 LLM，带重试和降级
+        full_answer = ""
         try:
-            stream = self._client.chat.completions.create(
-                model=self._llm_cfg["model"],
-                messages=messages,
-                temperature=self._llm_cfg.get("temperature", 0.3),
-                max_tokens=self._max_tokens,
-                stream=True,
-            )
-            has_content = False
-            full_answer = ""
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    has_content = True
-                    token = chunk.choices[0].delta.content
-                    full_answer += token
-                    yield {"status": "generating", "chunk": token}
-            if not has_content:
-                raise RuntimeError("流式响应为空")
+            for token in self._call_llm_stream(messages):
+                full_answer += token
+                yield {"status": "generating", "chunk": token}
         except Exception as stream_err:
             logger.warning("流式调用失败，尝试非流式: %s", str(stream_err)[:200])
             try:
-                resp = self._client.chat.completions.create(
-                    model=self._llm_cfg["model"],
-                    messages=messages,
-                    temperature=self._llm_cfg.get("temperature", 0.3),
-                    max_tokens=self._max_tokens,
-                )
-                full_answer = resp.choices[0].message.content
+                full_answer = self._call_llm_nonstream(messages)
                 if full_answer:
                     yield {"status": "generating", "chunk": full_answer}
                 else:
@@ -534,15 +570,30 @@ class RAGChain:
                     return
             except Exception as e2:
                 err_detail = str(e2)
-                # 提取 HTTP 状态码和 API 地址，帮助用户诊断
-                api_url = self._llm_cfg.get("api_base", "未知")
-                model = self._llm_cfg.get("model", "未知")
-                err_msg = f"LLM 调用失败\n\n> API: `{api_url}`\n> 模型: `{model}`\n> 错误: {err_detail}"
+                err_msg = f"LLM 调用失败\n\n> 模型: `{self._llm_cfg.get('model', '未知')}`\n> 错误: {err_detail}"
                 audit_log(username, "query", details=err_msg, query=question,
                           result_count=len(search_results),
                           duration_ms=(time.time() - start_time) * 1000)
                 yield {"status": "error", "message": err_msg}
                 return
+
+        # 后处理：检测 LLM 是否遵守格式要求或引用了知识库来源
+        format_ok = full_answer.startswith("【知识库回答】") or full_answer.startswith("【拒绝回答】")
+        has_source = False
+        if not format_ok:
+            # 检查是否至少引用了一个知识库中的文档来源
+            for src in sources:
+                src_name = src.get("source", "")
+                if src_name and src_name in full_answer:
+                    has_source = True
+                    break
+            # 也检查常见的文件引用模式
+            if re.search(r'(来源|source)[：:]\s*\S+\.(md|cc|h|txt)', full_answer):
+                has_source = True
+
+        if not format_ok and not has_source:
+            logger.warning("LLM 回答未引用知识库来源，替换为拒绝回答")
+            full_answer = "抱歉，知识库中暂无相关内容，无法回答该问题。"
 
         duration_ms = (time.time() - start_time) * 1000
         audit_log(
@@ -555,6 +606,81 @@ class RAGChain:
         )
 
         yield {"status": "done", "sources": sources}
+
+    def _call_llm_stream(self, messages: list[dict], max_retries: int = 3) -> Generator[str, None, None]:
+        """流式调用 LLM，带指数退避重试。
+
+        Args:
+            messages: 消息列表
+            max_retries: 最大重试次数
+
+        Yields:
+            生成的 token 片段
+
+        Raises:
+            RuntimeError: 所有重试均失败
+        """
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                stream = self._client.chat.completions.create(
+                    model=self._llm_cfg["model"],
+                    messages=messages,
+                    temperature=self._llm_cfg.get("temperature", 0.3),
+                    max_tokens=self._max_tokens,
+                    stream=True,
+                )
+                has_content = False
+                for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        has_content = True
+                        yield chunk.choices[0].delta.content
+                if not has_content:
+                    raise RuntimeError("流式响应为空")
+                return  # 成功，退出
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning(
+                        "LLM 流式调用失败 (尝试 %d/%d)，%d 秒后重试: %s",
+                        attempt + 1, max_retries, wait, str(e)[:100]
+                    )
+                    time.sleep(wait)
+        raise RuntimeError(f"LLM 调用失败（已重试 {max_retries} 次）: {last_error}")
+
+    def _call_llm_nonstream(self, messages: list[dict], max_retries: int = 3) -> str:
+        """非流式调用 LLM，带指数退避重试。
+
+        Returns:
+            LLM 返回的文本内容
+
+        Raises:
+            RuntimeError: 所有重试均失败
+        """
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                resp = self._client.chat.completions.create(
+                    model=self._llm_cfg["model"],
+                    messages=messages,
+                    temperature=self._llm_cfg.get("temperature", 0.3),
+                    max_tokens=self._max_tokens,
+                )
+                content = resp.choices[0].message.content
+                if content:
+                    return content
+                raise RuntimeError("模型返回了空内容")
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning(
+                        "LLM 非流式调用失败 (尝试 %d/%d)，%d 秒后重试: %s",
+                        attempt + 1, max_retries, wait, str(e)[:100]
+                    )
+                    time.sleep(wait)
+        raise RuntimeError(f"LLM 调用失败（已重试 {max_retries} 次）: {last_error}")
 
     @classmethod
     def from_config(cls, config_path: str = "config.yaml") -> "RAGChain":

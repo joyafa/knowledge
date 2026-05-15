@@ -132,16 +132,18 @@ def build_windows(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir
     else:
         print("  警告: 未找到模型文件，安装包中将不包含 embedding 模型")
 
-    # 修改 config.yaml 指向本地模型
+    # 修改 config.yaml 指向安装后的本地模型路径
     config_file = app_dir / "config.yaml"
     if config_file.exists():
         import yaml
         with open(config_file, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
-        config["embedding"]["local_path"] = str((staging / "model").resolve())
+        # 安装后模型位于 $INSTDIR\model\，使用相对路径（launch.bat 会设置 MODEL_ROOT）
+        config["embedding"]["local_path"] = "${MODEL_ROOT}/embedding"
+        config["reranker"]["local_path"] = "${MODEL_ROOT}/reranker"
         with open(config_file, "w", encoding="utf-8") as f:
             yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        print("  config.yaml 已更新模型路径")
+        print("  config.yaml 已更新模型路径（使用 ${MODEL_ROOT} 变量）")
 
     # ── 5. 复制启动脚本 ──
     print("[5/6] 复制启动脚本...")

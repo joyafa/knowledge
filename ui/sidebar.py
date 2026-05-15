@@ -6,9 +6,11 @@
 import streamlit as st
 from datetime import datetime
 
+from rag import __version__
 from rag.config import get_config
 from rag.vectorstore import VectorStore
 from rag.loader import get_knowledge_files_meta
+from ui import render_logo_img
 from services.history import (
     load_all_history_dates,
     load_history_by_date,
@@ -31,9 +33,9 @@ def render_sidebar(config):
         # ── Logo 区域 ──
         st.markdown(f"""
         <div style="text-align:center; padding: 16px 0 8px 0;">
-            <div style="font-size:2.2em;">◈</div>
-            <div style="font-size:0.95em; font-weight:600; margin-top:4px;">{ui_cfg.title}</div>
-            <div style="font-size:0.7em; color:#888; margin-top:2px;">v0.8.17</div>
+            {render_logo_img(width=72)}
+            <div style="font-size:0.95em; font-weight:600; margin-top:8px;">{ui_cfg.title}</div>
+            <div style="font-size:0.7em; color:#888; margin-top:2px;">v{__version__}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -182,8 +184,11 @@ def render_sidebar(config):
 
         # ── 落款 ──
         if ui_cfg.company_name:
+            copyright_text = f"© {datetime.now().year} {ui_cfg.company_name}"
+            if ui_cfg.company_url:
+                copyright_text += f" | {ui_cfg.company_url}"
             st.markdown(f"""
-            <div style="text-align:center; padding:20px 0 8px 0; color:#666; font-size:0.7em;">
-                {ui_cfg.company_name}
+            <div style="text-align:center; padding:20px 0 8px 0; color:#888; font-size:0.7em;">
+                {copyright_text}
             </div>
             """, unsafe_allow_html=True)

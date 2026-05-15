@@ -46,6 +46,8 @@ GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 
 # Embedding 模型
 EMBEDDING_MODEL = "shibing624/text2vec-base-chinese"
+# Reranker 模型
+RERANKER_MODEL = "BAAI/bge-reranker-base"
 
 
 def download_file(url: str, dest: Path, desc: str = ""):
@@ -128,18 +130,44 @@ def download_platform_wheels(platform_name: str, wheels_dir: Path):
         print(f"  torch CPU 版下载失败，保留通用版本")
 
 
-def download_embedding_model(model_dir: Path):
-    """下载 embedding 模型。"""
+def download_model_safe(model_name: str, model_dir: Path, model_type: str = ""):
+    """下载并保存模型（embedding 或 reranker）。
+
+    Args:
+        model_name: HuggingFace 模型名
+        model_dir: 保存目录
+        model_type: 模型类型标签（用于日志）
+    """
     if model_dir.exists() and any(model_dir.iterdir()):
-        print(f"  模型已存在: {model_dir}")
+        print(f"  {model_type}模型已存在: {model_dir}")
         return
     model_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-    from sentence_transformers import SentenceTransformer
-    print(f"  下载模型: {EMBEDDING_MODEL}")
-    model = SentenceTransformer(EMBEDDING_MODEL)
-    model.save(str(model_dir))
-    print(f"  模型已保存: {model_dir}")
+    
+    if "bge-reranker" in model_name:
+        from sentence_transformers import CrossEncoder
+        print(f"  下载 {model_type}模型: {model_name}")
+        m = CrossEncoder(model_name)
+        m.model.save_pretrained(str(model_dir))
+        # 同时保存 tokenizer
+        m.tokenizer.save_pretrained(str(model_dir))
+    else:
+        from sentence_transformers import SentenceTransformer
+        print(f"  下载 {model_type}模型: {model_name}")
+        m = SentenceTransformer(model_name)
+        m.save(str(model_dir))
+    
+    print(f"  {model_type}模型已保存: {model_dir}")
+
+
+def download_embedding_model(model_dir: Path):
+    """下载 embedding 模型（兼容旧接口）。"""
+    download_model_safe(EMBEDDING_MODEL, model_dir, "Embedding ")
+
+
+def download_reranker_model(model_dir: Path):
+    """下载 reranker 模型。"""
+    download_model_safe(RERANKER_MODEL, model_dir, "Reranker ")
 
 
 def copy_project_code(dest: Path):
@@ -179,8 +207,9 @@ def phase_download(platforms: list[str], skip_download: bool):
         wheels_dir = CACHE_DIR / f"wheels_{plat}"
         download_platform_wheels(plat, wheels_dir)
 
-    # 下载 embedding 模型
-    download_embedding_model(CACHE_DIR / "model")
+    # 下载 embedding 模型和 reranker 模型
+    download_embedding_model(CACHE_DIR / "model" / "embedding")
+    download_reranker_model(CACHE_DIR / "model" / "reranker")
 
     # 下载 Python 运行时
     if "windows" in platforms:

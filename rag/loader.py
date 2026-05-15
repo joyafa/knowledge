@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-import yaml
-
+from rag.config import load_config
 from rag.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -25,37 +24,6 @@ class DocumentChunk:
     """文档分块。"""
     content: str
     metadata: dict = field(default_factory=dict)
-
-
-def load_config(config_path: str = "config.yaml") -> dict:
-    """加载配置文件（兼容旧接口）。"""
-    from rag.config import get_config as get_app_config
-    config = get_app_config(config_path)
-    return {
-        "knowledge": {
-            "docs_directory": config.knowledge.docs_directory,
-            "chunk_size": config.knowledge.chunk_size,
-            "chunk_overlap": config.knowledge.chunk_overlap,
-        },
-        "embedding": {
-            "model": config.embedding.model,
-            "local_path": config.embedding.local_path,
-        },
-        "vectorstore": {
-            "persist_directory": config.vectorstore.persist_directory,
-            "collection_name": config.vectorstore.collection_name,
-            "top_k": config.vectorstore.top_k,
-            "distance_threshold": config.vectorstore.distance_threshold,
-        },
-        "llm": {
-            "api_base": config.llm.api_base,
-            "api_key": config.llm.api_key,
-            "model": config.llm.model,
-            "temperature": config.llm.temperature,
-            "max_tokens": config.llm.max_tokens,
-            "context_window": config.llm.context_window,
-        },
-    }
 
 
 def _split_by_headers(text: str, max_chunk_size: int, overlap: int) -> list[str]:

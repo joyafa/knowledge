@@ -103,10 +103,10 @@ def build_linux(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir: 
     app_dir = staging / "opt" / "knowledge-assistant" / "app"
     model_dir = staging / "opt" / "knowledge-assistant" / "model"
 
-    # 项目代码
+    # 项目代码（Linux 无 PyInstaller 编译，需保留源码，但排除 dev 工具）
     includes = [
-        "app.py", "config.yaml", "requirements.txt",
-        "rag", "scripts", "knowledge", "ui", "services",
+        "app.py", "config.yaml", "requirements.txt", "run_app.py", "logo.png",
+        "rag", "ui", "services", "scripts", "knowledge",
     ]
     for item in includes:
         src = root_dir / item
@@ -124,19 +124,18 @@ def build_linux(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir: 
     else:
         print("  警告: 未找到模型文件")
 
-    # 修改 config.yaml 指向安装后的绝对路径（embedding + reranker）
+    # 修改 config.yaml 指向安装后的系统路径
     config_file = app_dir / "config.yaml"
     import yaml
     if config_file.exists():
         with open(config_file, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
-        config["embedding"]["local_path"] = "/opt/knowledge-assistant/model/embedding"
-        config["reranker"]["local_path"] = "/opt/knowledge-assistant/model/reranker"
+        # 模型路径保持 env var 引用，由 run_app.py 运行时自动检测
         config["vectorstore"]["persist_directory"] = "/var/lib/knowledge-assistant/chroma_db"
         config["knowledge"]["docs_directory"] = "/var/lib/knowledge-assistant/knowledge"
         with open(config_file, "w", encoding="utf-8") as f:
             yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        print("  config.yaml 已更新路径")
+        print("  config.yaml 已更新系统路径（模型路径保留运行时检测）")
 
     # 读取版本号
     with open(config_file, "r", encoding="utf-8") as f:

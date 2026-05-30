@@ -1,189 +1,168 @@
-"""Windows 安装包构建脚本。
+"""Windows 安装包构建脚本（PyInstaller 版本）。
 
-由 build_installer.py 调用。准备 staging 目录，调用 NSIS 生成 .exe 安装包。
+由 build_installer.py 调用。使用 PyInstaller 编译应用为 exe，
+然后调用 NSIS 生成 .exe 安装包。
 
-前置条件: NSIS 3 已安装（makensis 在 PATH 中）
+前置条件: PyInstaller 已安装（pip install pyinstaller）
+           NSIS 3 已安装（makensis 在 PATH 中）
 """
 
-import os
 import shutil
 import subprocess
 import sys
-import zipfile
+import time
 from pathlib import Path
 
-PYTHON_VERSION = "3.11.9"
-PYTHON_TAG = "311"
+
+def _rmtree_robust(path: Path, retries: int = 3, delay: float = 1.0) -> None:
+    """Robust rmtree with retry on PermissionError (Windows file lock)."""
+    for attempt in range(retries):
+        try:
+            shutil.rmtree(path)
+            return
+        except PermissionError:
+            if attempt < retries - 1:
+                print(f"  删除 {path} 失败，{delay}s 后重试 ({attempt + 1}/{retries})...")
+                time.sleep(delay)
+            else:
+                # 最后尝试：重命名绕过
+                backup = path.with_suffix(path.suffix + ".old")
+                print(f"  删除失败，尝试重命名为 {backup}")
+                try:
+                    path.rename(backup)
+                except Exception as rename_err:
+                    raise PermissionError(f"无法删除或重命名 {path}: {rename_err}") from None
 
 
-def build_windows(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir: Path):
-    """构建 Windows .exe 安装包。"""
+def build_windows(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir: Path, skip_models: bool = False):
+    """构建 Windows .exe 安装包。
+
+    Steps:
+    1. PyInstaller 编译 Python 应用为独立 exe 目录
+    2. 修复数据文件位置（PyInstaller 将 datas 放在 _internal/ 中）
+    3. 准备 staging 目录
+    4. 调用 NSIS 生成安装包
+    """
     staging = dist_dir / "staging" / "windows"
     win_installer_dir = installer_dir / "windows"
+    spec_file = root_dir / "knowledge_app.spec"
 
-    # 清理 staging
-    if staging.exists():
-        shutil.rmtree(staging)
-    staging.mkdir(parents=True)
-
-    # ── 1. 解压嵌入式 Python ──
-    print("[1/6] 解压嵌入式 Python...")
-    python_dir = staging / "python"
-    python_zip = cache_dir / f"python-{PYTHON_VERSION}-embed-amd64.zip"
-    if not python_zip.exists():
-        print(f"  错误: 找不到 {python_zip}，请先运行下载步骤")
+    if not spec_file.exists():
+        print(f"  错误: 找不到 PyInstaller spec 文件: {spec_file}")
         sys.exit(1)
-    with zipfile.ZipFile(python_zip, "r") as zf:
-        zf.extractall(python_dir)
-    print(f"  Python 已解压到: {python_dir}")
 
-    # 修改 python311._pth 启用 site-packages
-    pth_file = python_dir / f"python{PYTHON_TAG}._pth"
-    pth_file.write_text(
-        f"python{PYTHON_TAG}.zip\n"
-        f".\n"
-        f"Lib\n"
-        f"Lib\\site-packages\n"
-        f"import site\n",
-        encoding="utf-8",
-    )
-    print("  已修改 _pth 启用 site-packages")
-
-    # 创建 Lib/site-packages 目录
-    (python_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True)
-
-    # ── 2. 安装 pip 到嵌入式 Python ──
-    print("[2/6] 安装 pip...")
-    get_pip = cache_dir / "get-pip.py"
-    if get_pip.exists():
-        subprocess.check_call(
-            [str(python_dir / "python.exe"), str(get_pip), "--no-warn-script-location"],
-            cwd=str(python_dir),
+    # 1. PyInstaller 编译
+    print("[1/4] PyInstaller 编译应用...")
+    print(f"  Spec: {spec_file}")
+    # 不要使用 capture_output=True — PyInstaller 日志量巨大，管道缓冲区满会导致子进程挂死
+    # 改为输出到日志文件
+    pyi_log = root_dir / "build" / "pyinstaller.log"
+    pyi_log.parent.mkdir(parents=True, exist_ok=True)
+    with open(pyi_log, "w", encoding="utf-8") as log_f:
+        result = subprocess.run(
+            [sys.executable, "-m", "PyInstaller", str(spec_file), "--clean", "--noconfirm"],
+            cwd=str(root_dir),
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            text=True,
         )
-    else:
-        print("  警告: get-pip.py 不存在，尝试用 wheel 文件中的 pip")
+    if result.returncode != 0:
+        # 读取日志末尾
+        with open(pyi_log, "r", encoding="utf-8", errors="replace") as log_f:
+            content = log_f.read()
+            tail = content[-2000:] if len(content) > 2000 else content
+        print(f"  PyInstaller 编译失败 (日志: {pyi_log}):\n{tail}")
+        sys.exit(1)
+    print("  PyInstaller 编译完成")
 
-    # ── 3. 离线安装依赖 ──
-    print("[3/6] 离线安装 Python 依赖...")
-    wheels_dir = cache_dir / "wheels_windows"
-    if not wheels_dir.exists():
-        # 回退到通用 wheels 目录
-        wheels_dir = cache_dir / "wheels"
-    if not wheels_dir.exists():
-        print(f"  错误: 找不到 wheel 文件目录")
+    pyinstaller_output = root_dir / "dist" / "KnowledgeAssistant"
+    if not pyinstaller_output.exists():
+        print(f"  错误: PyInstaller 输出目录不存在: {pyinstaller_output}")
         sys.exit(1)
 
-    requirements = root_dir / "requirements.txt"
-    pip_exe = str(python_dir / "python.exe")
+    # 2. 修复数据文件位置
+    print("[2/4] 修复数据文件位置...")
+    internal_dir = pyinstaller_output / "_internal"
+    # rag/ui/services 源码已编译进 PYZ，此处仅复制运行时必需的纯数据文件
+    for item in ["app.py", "config.yaml", "logo.png", "knowledge", "data"]:
+        src = internal_dir / item
+        dst = pyinstaller_output / item
+        if src.exists() and not dst.exists():
+            if src.is_dir():
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+            print(f"  已复制: {item}")
 
-    install_cmd = [
-        pip_exe, "-m", "pip", "install",
-        "--no-index",
-        "--find-links", str(wheels_dir),
-        "-r", str(requirements),
-        "--no-warn-script-location",
-    ]
-
-    result = subprocess.run(install_cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"  pip install 失败:\n{result.stderr}")
-        print("  尝试逐个安装...")
-        # 解析 requirements.txt 并逐个安装
-        with open(requirements, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    subprocess.run(
-                        [pip_exe, "-m", "pip", "install", "--no-index",
-                         "--find-links", str(wheels_dir), line,
-                         "--no-warn-script-location"],
-                        capture_output=True,
-                    )
-    print("  依赖安装完成")
-
-    # ── 4. 复制项目代码和模型 ──
-    print("[4/6] 复制项目代码和模型...")
-    app_dir = staging / "app"
-    model_dir = staging / "model"
-
-    # 项目代码
-    includes = [
-        "app.py", "config.yaml", "requirements.txt",
-        "rag", "scripts", "knowledge", "ui", "services",
-    ]
-    for item in includes:
-        src = root_dir / item
-        dst = app_dir / item
-        if src.is_dir():
-            shutil.copytree(src, dst)
-        elif src.exists():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-
-    # 复制 write_config.py 到 app/scripts/
-    write_config_src = win_installer_dir / "write_config.py"
-    if write_config_src.exists():
-        shutil.copy2(write_config_src, app_dir / "scripts" / "write_config.py")
-
-    # 模型
-    cached_model = cache_dir / "model"
-    if cached_model.exists():
-        shutil.copytree(cached_model, model_dir)
+    # 复制本地模型（如果有）
+    if not skip_models:
+        model_src = root_dir / "model"
+        model_dst = pyinstaller_output / "model"
+        if model_src.exists() and not model_dst.exists():
+            # 只复制模型快照目录
+            for model_item in model_src.iterdir():
+                if model_item.is_dir() and model_item.name.startswith("models--"):
+                    snapshot_dir = model_item / "snapshots"
+                    if snapshot_dir.exists():
+                        snapshots = sorted(snapshot_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+                        if snapshots:
+                            model_name = model_item.name.replace("models--", "").replace("--", "/")
+                            model_type = "text2vec-base-chinese" if "text2vec" in model_name else "bge-reranker-base"
+                            target = model_dst / model_type
+                            shutil.copytree(snapshots[0], target)
+                            print(f"  已复制模型: {model_type}")
     else:
-        print("  警告: 未找到模型文件，安装包中将不包含 embedding 模型")
+        print("  (跳过模型复制 — 快速调试模式)")
 
-    # 修改 config.yaml 指向安装后的本地模型路径
-    config_file = app_dir / "config.yaml"
-    if config_file.exists():
-        import yaml
-        with open(config_file, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        # 安装后模型位于 $INSTDIR\model\，使用相对路径（launch.bat 会设置 MODEL_ROOT）
-        config["embedding"]["local_path"] = "${MODEL_ROOT}/embedding"
-        config["reranker"]["local_path"] = "${MODEL_ROOT}/reranker"
-        with open(config_file, "w", encoding="utf-8") as f:
-            yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        print("  config.yaml 已更新模型路径（使用 ${MODEL_ROOT} 变量）")
+    # 3. 准备 staging 目录
+    print("[3/4] 准备 staging 目录...")
+    if staging.exists():
+        _rmtree_robust(staging)
+    staging.mkdir(parents=True, exist_ok=True)
 
-    # ── 5. 复制启动脚本 ──
-    print("[5/6] 复制启动脚本...")
-    for bat_name in ["launch.bat", "launch_ingest.bat", "stop.bat",
-                     "edit_config.bat", "open_knowledge.bat"]:
-        src = win_installer_dir / bat_name
-        if src.exists():
-            shutil.copy2(src, staging / bat_name)
+    print(f"  复制: {pyinstaller_output} -> {staging}")
+    shutil.copytree(pyinstaller_output, staging, dirs_exist_ok=True)
 
     # 读取版本号
     import yaml
-    with open(app_dir / "config.yaml", "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    version = config.get("version", "0.8.17")
+    config_file = staging / "config.yaml"
+    version = "0.8.17"
+    if config_file.exists():
+        with open(config_file, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        version = config.get("version", version)
 
-    # ── 6. 调用 NSIS 构建安装包 ──
-    print("[6/6] 调用 NSIS 构建安装包...")
+    print(f"  staging 准备完成，版本: {version}")
+
+    # 4. 调用 NSIS 构建安装包
+    print("[4/4] 调用 NSIS 构建安装包...")
     nsi_script = win_installer_dir / "knowledge_setup.nsi"
 
-    # 检查 NSIS
     makensis = shutil.which("makensis")
     if not makensis:
         print("\n  错误: 未找到 makensis！")
         print("  请安装 NSIS 3: https://nsis.sourceforge.io/Download")
-        print("  安装后将 NSIS 目录加入 PATH 环境变量")
         print(f"\n  staging 目录已准备好: {staging}")
-        print("  你可以手动运行:")
-        print(f'    makensis /DVERSION={version} /DSTAGING_DIR="{staging}" "{nsi_script}"')
+        print(f"  你可以手动运行:")
+        print(f'    makensis /DVERSION={version} /DSTAGING_DIR="{staging}" /DOUTDIR="{dist_dir}" "{nsi_script}"')
         return False
 
     cmd = [
         makensis,
         f"/DVERSION={version}",
         f"/DSTAGING_DIR={staging}",
+        f"/DOUTDIR={dist_dir}",
         str(nsi_script),
     ]
     print(f"  执行: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    nsis_log = root_dir / "build" / "nsis.log"
+    nsis_log.parent.mkdir(parents=True, exist_ok=True)
+    with open(nsis_log, "w", encoding="utf-8") as log_f:
+        result = subprocess.run(cmd, stdout=log_f, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0:
-        print(f"  NSIS 编译失败:\n{result.stderr}")
+        with open(nsis_log, "r", encoding="utf-8", errors="replace") as log_f:
+            content = log_f.read()
+        print(f"  NSIS 编译失败 (日志: {nsis_log}):\n{content[-2000:]}")
         return False
 
     output_exe = dist_dir / f"knowledge-setup-{version}-windows.exe"

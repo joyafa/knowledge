@@ -28,29 +28,42 @@ python scripts/ingest.py
 # 清空向量库
 python scripts/clear_db.py
 
-# 启动 Web 界面
-streamlit run app.py
+# 启动 Web 界面（开发模式，run_app.py 为统一入口）
+python run_app.py
 
-# 打包离线安装包（在有网机器上运行）
-python scripts/prepare_offline.py
+# 打包 Windows 安装包（快速调试，不含模型）
+python scripts/build_installer.py --platform windows --skip-models
+
+# 打包 Windows 完整安装包（含模型，需先运行 dev 模式下载模型）
+python scripts/build_installer.py --platform windows
+
+# 准备 Linux 安装包 staging（Windows 上执行，拷贝到 Linux 用 fpm 打包）
+python scripts/prepare_linux_staging.py
 ```
 
 ## 架构
 
 ```
+run_app.py           → 统一启动入口（处理环境变量、目录创建、模型检测，兼容 dev/PyInstaller）
 app.py               → Streamlit 主应用（双栏布局 + 赛博朋克主题 + 用户登录）
 rag/
+  config.py          → Pydantic 配置管理（支持 ${ENV_VAR:-default} 环境变量替换）
   loader.py          → 文档加载与分块（支持 .md / .txt / .pdf，按标题层级切分）
   embeddings.py      → 向量化（sentence-transformers → ChromaDB embedding function）
   vectorstore.py     → ChromaDB 向量库管理（全局单例缓存，增删查）
-  chain.py           → RAG 检索链（复用 embedding 模型检索 + prompt 裁剪 + LLM 生成）
+  chain.py           → RAG 检索链（混合检索 + RRF 融合 + Reranker + LLM 生成）
+  preload.py         → 后台预加载（daemon thread，避免 Streamlit rerun 阻塞）
 scripts/
-  ingest.py          → 文档入库脚本
+  build_installer.py → 统一构建入口（--platform windows|linux|both，--skip-models 快速调试）
+  build_windows.py   → Windows PyInstaller + NSIS 打包
+  build_linux.py     → Linux fpm 打包（需在 Linux 上运行）
+  prepare_linux_staging.py → Linux staging 准备（跨平台）
+  ingest.py          → 文档入库
   clear_db.py        → 清空向量库
-  prepare_offline.py → 离线打包脚本（生成 Windows + Linux 安装包）
 config.yaml          → 全局配置（模型、向量库、分块参数、检索阈值）
 knowledge/           → 知识库文档目录（.md / .txt / .pdf）
-chat_history/        → 聊天记录（按用户名/日期隔离存储）
+data/                → 运行时数据（chroma_db、knowledge、logs、chat_history）
+model/               → AI 模型缓存（SENTENCE_TRANSFORMERS_HOME 指向此处）
 ```
 
 ## 核心设计
@@ -84,9 +97,11 @@ chat_history/        → 聊天记录（按用户名/日期隔离存储）
 
 ### 离线部署
 
-- `scripts/prepare_offline.py` 打包 wheels + embedding 模型 + 项目代码
-- Windows 双击 `install_offline.bat`，Linux 运行 `install_offline.sh`
-- 自动配置本地 embedding 模型路径
+- `scripts/build_installer.py` 统一构建入口，支持 `--skip-models` 快速调试开关
+- Windows：PyInstaller 编译 exe + NSIS 打包安装包，源码编译进 PYZ 不暴露
+- Linux：源码 + Python standalone + fpm 打包 .deb/.rpm，`prepare_linux_staging.py` 可在 Windows 上准备
+- 模型缓存统一到 `model/` 目录，`run_app.py` 启动时自动检测本地模型并设置 `EMBEDDING_LOCAL_PATH`
+- `config.yaml` 的 `local_path` 使用 `${EMBEDDING_LOCAL_PATH:-}` 环境变量引用，不硬编码
 
 ## 配置切换
 

@@ -108,6 +108,8 @@ class UIConfig(BaseModel):
 
 class AppConfig(BaseModel):
     """应用全局配置。"""
+    # 应用版本号
+    version: str = "0.8.17"
     # 本地模型根目录（离线部署时设置环境变量 MODEL_ROOT）
     model_root: str = "model"
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -167,6 +169,7 @@ def load_config(config_path: str = "config.yaml") -> dict:
     """
     config = get_config(config_path)
     return {
+        "version": config.version,
         "model_root": config.model_root,
         "knowledge": {
             "docs_directory": config.knowledge.docs_directory,

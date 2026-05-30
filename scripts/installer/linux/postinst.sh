@@ -30,7 +30,7 @@ if [ ! -f "${CONFIG_DIR}/config.yaml" ]; then
     cp "${APP_DIR}/app/config.yaml" "${CONFIG_DIR}/config.yaml"
 fi
 
-# 更新 config.yaml 中的路径
+# 更新 config.yaml 中的系统路径（模型路径由 run_app.py 运行时自动检测）
 if command -v python3 >/dev/null 2>&1; then
     python3 -c "
 import yaml, sys
@@ -39,7 +39,11 @@ with open(p, 'r', encoding='utf-8') as f:
     c = yaml.safe_load(f)
 c['vectorstore']['persist_directory'] = '${DATA_DIR}/chroma_db'
 c['knowledge']['docs_directory'] = '${DATA_DIR}/knowledge'
-c['embedding']['local_path'] = '${APP_DIR}/model'
+# 模型 local_path 保持 env var 引用，不硬编码
+if 'local_path' in c.get('embedding', {}) and c['embedding']['local_path'].startswith('/'):
+    c['embedding']['local_path'] = ''
+if 'local_path' in c.get('reranker', {}) and c['reranker']['local_path'].startswith('/'):
+    c['reranker']['local_path'] = ''
 with open(p, 'w', encoding='utf-8') as f:
     yaml.dump(c, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 " 2>/dev/null || true

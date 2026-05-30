@@ -6,6 +6,10 @@ set "SCRIPT_DIR=%~dp0"
 set "PYTHON=%SCRIPT_DIR%python\python.exe"
 set "APP_DIR=%SCRIPT_DIR%app"
 set "DATA_DIR=%SCRIPT_DIR%data"
+set "MODEL_DIR=%SCRIPT_DIR%model"
+
+:: 设置模型根路径环境变量
+set "MODEL_ROOT=%MODEL_DIR%"
 
 echo.
 echo ============================================

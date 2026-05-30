@@ -8,6 +8,7 @@ from datetime import datetime
 
 from rag import __version__
 from rag.config import get_config
+from rag.preload import is_done, get_error
 from rag.vectorstore import VectorStore
 from rag.loader import get_knowledge_files_meta
 from ui import render_logo_img
@@ -101,29 +102,28 @@ def render_sidebar(config):
         # ── 知识库文档 ──
         st.caption("📚 知识库文档")
 
-        with st.expander("文档列表", expanded=False):
-            files = get_knowledge_files_meta(config.knowledge.docs_directory)
-            if not files:
-                st.info("暂无文档")
-            else:
-                search_query = st.text_input("搜索", placeholder="关键词...", key="sidebar_doc_search", label_visibility="collapsed")
-                filtered = files
-                if search_query:
-                    filtered = [f for f in files
-                               if search_query.lower() in f["title"].lower()
-                               or search_query.lower() in f["path"].lower()]
-                st.caption(f"{len(filtered)}/{len(files)} 篇")
+        files = get_knowledge_files_meta(config.knowledge.docs_directory)
+        if not files:
+            st.info("暂无文档")
+        else:
+            search_query = st.text_input("搜索", placeholder="关键词...", key="sidebar_doc_search", label_visibility="collapsed")
+            filtered = files
+            if search_query:
+                filtered = [f for f in files
+                           if search_query.lower() in f["title"].lower()
+                           or search_query.lower() in f["path"].lower()]
+            st.caption(f"{len(filtered)}/{len(files)} 篇")
 
-                for f in filtered[:80]:
-                    size_label = f"{f['size'] // 1024}KB" if f['size'] >= 1024 else f"{f['size']}B"
-                    with st.expander(f"{f['icon']} {f['title'][:30]} ({size_label})"):
-                        st.caption(f"`{f['path']}`")
-                        content = read_full_content(config.knowledge.docs_directory, f["path"])
-                        if content:
-                            preview = content[:600]
-                            if len(content) > 600:
-                                preview += "\n\n..."
-                            st.markdown(preview)
+            for f in filtered[:80]:
+                size_label = f"{f['size'] // 1024}KB" if f['size'] >= 1024 else f"{f['size']}B"
+                with st.expander(f"{f['icon']} {f['title'][:30]} ({size_label})"):
+                    st.caption(f"`{f['path']}`")
+                    content = read_full_content(config.knowledge.docs_directory, f["path"])
+                    if content:
+                        preview = content[:600]
+                        if len(content) > 600:
+                            preview += "\n\n..."
+                        st.markdown(preview)
 
         # ── 历史记录 ──
         with st.expander("📅 历史记录", expanded=False):
@@ -131,15 +131,15 @@ def render_sidebar(config):
             if all_dates:
                 for date_str in all_dates[:10]:
                     label = date_str + (" · 今天" if date_str == datetime.now().strftime("%Y-%m-%d") else "")
-                    with st.expander(label):
-                        day_history = load_history_by_date(username, date_str)
-                        if not isinstance(day_history, list):
-                            day_history = []
-                        for msg in day_history[-15:]:
-                            role_icon = "▶" if msg["role"] == "user" else "◆"
-                            st.caption(f"{role_icon} {msg.get('timestamp', '')}")
-                            st.markdown(msg["content"][:150])
-                            st.markdown("---")
+                    st.markdown(f"**{label}**")
+                    day_history = load_history_by_date(username, date_str)
+                    if not isinstance(day_history, list):
+                        day_history = []
+                    for msg in day_history[-15:]:
+                        role_icon = "▶" if msg["role"] == "user" else "◆"
+                        st.caption(f"{role_icon} {msg.get('timestamp', '')}")
+                        st.markdown(msg["content"][:150])
+                    st.markdown("---")
             else:
                 st.caption("暂无记录")
 
@@ -155,6 +155,10 @@ def render_sidebar(config):
                 vs = VectorStore.from_config()
                 s = vs.get_stats()
                 st.success(f"✅ 向量库已就绪 ({s['total_chunks']}块)")
+            elif is_done():
+                # 线程已完成但 chain 未就绪 → 竞态或真实错误
+                err = get_error()
+                st.warning(f"⚠️ 初始化失败: {err[:50]}")
             else:
                 st.info("⏳ 检索引擎加载中...")
         except Exception:
@@ -184,9 +188,7 @@ def render_sidebar(config):
 
         # ── 落款 ──
         if ui_cfg.company_name:
-            copyright_text = f"© {datetime.now().year} {ui_cfg.company_name}"
-            if ui_cfg.company_url:
-                copyright_text += f" | {ui_cfg.company_url}"
+            copyright_text = f"Copyright © {datetime.now().year} {ui_cfg.company_name}. All rights reserved."
             st.markdown(f"""
             <div style="text-align:center; padding:20px 0 8px 0; color:#888; font-size:0.7em;">
                 {copyright_text}

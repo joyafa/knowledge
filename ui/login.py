@@ -59,9 +59,7 @@ def render_login_screen(config=None):
                 st.warning("用户名不能为空")
 
         if ui_cfg.company_name:
-            copyright_text = f"© {datetime.now().year} {ui_cfg.company_name}"
-            if ui_cfg.company_url:
-                copyright_text += f" | {ui_cfg.company_url}"
+            copyright_text = f"Copyright © {datetime.now().year} {ui_cfg.company_name}. All rights reserved."
             st.markdown(f"""
             <div style="text-align:center; margin-top:40px; color:#888; font-size:0.75em;">
                 {copyright_text}

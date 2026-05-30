@@ -1,258 +1,167 @@
 """离线部署打包脚本。
 
-在有网络的机器上运行此脚本，下载所有依赖和模型，生成离线安装包。
-然后将整个 output 目录拷贝到目标机器即可。
+直接将当前项目目录（含虚拟环境和本地模型缓存）打包为 zip。
+目标机器解压后即可运行，无需联网安装。
 
 使用方式:
     python scripts/prepare_offline.py
-
-输出:
-    knowledge_offline/
-    ├── wheels/          # Python 依赖包（wheel 文件）
-    ├── model/           # Embedding 模型文件
-    └── project/         # 项目代码
 """
 
 import os
 import shutil
-import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
-# 离线包输出目录
-OUTPUT_DIR = Path("knowledge_offline")
-WHEELS_DIR = OUTPUT_DIR / "wheels"
-MODEL_DIR = OUTPUT_DIR / "model"
-PROJECT_DIR = OUTPUT_DIR / "project"
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+OUTPUT_ZIP = PROJECT_DIR / "knowledge_offline.zip"
 
-# Embedding 模型名称
-EMBEDDING_MODEL = "shibing624/text2vec-base-chinese"
+# 排除的目录和文件
+EXCLUDES = {
+    "__pycache__",
+    ".git",
+    ".gitignore",
+    ".claude",
+    ".qoder",
+    "node_modules",
+    ".venv",
+    ".idea",
+    ".vscode",
+    "*.pyc",
+    # 排除旧的 venv（保留 venv311）
+}
+
+# 排除的目录名前缀/包含关系
+EXCLUDE_DIR_NAMES = {
+    "__pycache__",
+    ".git",
+    ".claude",
+    ".qoder",
+    ".venv",
+    ".idea",
+    ".vscode",
+    "node_modules",
+}
 
 
-def download_wheels():
-    """下载所有 Python 依赖的 wheel 文件。"""
+def should_exclude(path: Path, project_root: Path) -> bool:
+    """判断文件/目录是否应排除。"""
+    rel = path.relative_to(project_root)
+    parts = rel.parts
+
+    # 排除顶层的特定目录
+    top_level_excludes = {
+        "knowledge_offline",
+        "knowledge_offline.zip",
+        "test_retrieve.py",
+    }
+    if parts[0] in top_level_excludes:
+        return True
+
+    # 任意层级排除
+    for part in parts:
+        if part in EXCLUDE_DIR_NAMES:
+            return True
+
+    # 排除 .pyc 文件
+    if path.suffix == ".pyc":
+        return True
+
+    # 排除 Streamlit 缓存
+    if ".streamlit" in parts:
+        return True
+
+    return False
+
+
+def create_zip():
+    """将项目目录打包为 zip。"""
     print("=" * 50)
-    print("[1/3] 下载 Python 依赖包...")
+    print("知识库助手 — 离线部署打包")
     print("=" * 50)
-    WHEELS_DIR.mkdir(parents=True, exist_ok=True)
-
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "download",
-        "-r", "requirements.txt",
-        "-d", str(WHEELS_DIR),
-    ])
-    print(f"依赖包已下载到: {WHEELS_DIR}")
-
-
-def download_model():
-    """下载 Embedding 模型到本地目录。"""
-    print("\n" + "=" * 50)
-    print("[2/3] 下载 Embedding 模型...")
-    print("=" * 50)
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-
-    from sentence_transformers import SentenceTransformer
-    print(f"正在下载模型: {EMBEDDING_MODEL}")
-    model = SentenceTransformer(EMBEDDING_MODEL)
-    model.save(str(MODEL_DIR))
-    print(f"模型已保存到: {MODEL_DIR}")
-
-
-def copy_project():
-    """拷贝项目代码。"""
-    print("\n" + "=" * 50)
-    print("[3/3] 打包项目代码...")
-    print("=" * 50)
-
-    if PROJECT_DIR.exists():
-        shutil.rmtree(PROJECT_DIR)
-
-    # 需要拷贝的文件和目录
-    includes = [
-        "app.py",
-        "config.yaml",
-        "requirements.txt",
-        "rag",
-        "scripts",
-        "knowledge",
-    ]
-
-    for item in includes:
-        src = Path(item)
-        dst = PROJECT_DIR / item
-        if src.is_dir():
-            shutil.copytree(src, dst)
-        elif src.exists():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-
-    print(f"项目代码已拷贝到: {PROJECT_DIR}")
-
-
-def generate_install_script():
-    """生成离线安装脚本（Windows + Linux 双版本）。"""
-    # Windows 版
-    win_script = PROJECT_DIR / "install_offline.bat"
-    win_script.write_text("""@echo off
-chcp 65001 >nul
-REM 离线安装脚本 - Windows 版
-
-set SCRIPT_DIR=%~dp0
-for %%I in ("%SCRIPT_DIR%..") do set OFFLINE_DIR=%%~fI
-set WHEELS_DIR=%OFFLINE_DIR%\\wheels
-set MODEL_DIR=%OFFLINE_DIR%\\model
-
-echo ==========================================
-echo   知识库助手 - 离线安装 (Windows)
-echo ==========================================
-
-REM 1. 创建虚拟环境
-echo.
-echo [1/3] 创建 Python 虚拟环境...
-python -m venv venv
-call venv\\Scripts\\activate.bat
-
-REM 2. 离线安装依赖
-echo.
-echo [2/3] 安装 Python 依赖（离线）...
-pip install --no-index --find-links="%WHEELS_DIR%" -r requirements.txt
-
-REM 3. 更新配置，使用本地模型路径
-echo.
-echo [3/3] 配置本地 Embedding 模型路径...
-python -c "import yaml; f=open('config.yaml','r',encoding='utf-8'); c=yaml.safe_load(f); f.close(); c['embedding']['local_path']=r'%MODEL_DIR%'; f=open('config.yaml','w',encoding='utf-8'); yaml.dump(c,f,allow_unicode=True,default_flow_style=False); f.close(); print('已更新 config.yaml')"
-
-echo.
-echo ==========================================
-echo   安装完成！
-echo ==========================================
-echo.
-echo 后续步骤:
-echo   1. 将 Markdown/PDF/TXT 文档放入 knowledge/ 目录
-echo   2. 运行入库:  venv\\Scripts\\activate ^&^& python scripts/ingest.py
-echo   3. 启动服务:  venv\\Scripts\\activate ^&^& streamlit run app.py --server.port 8501
-echo.
-pause
-""", encoding="utf-8")
-
-    # Linux 版
-    install_script = PROJECT_DIR / "install_offline.sh"
-    install_script.write_text("""#!/bin/bash
-# 离线安装脚本 — 在目标 Linux 机器上运行
-
-set -e
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-OFFLINE_DIR="$(dirname "$SCRIPT_DIR")"
-WHEELS_DIR="$OFFLINE_DIR/wheels"
-MODEL_DIR="$OFFLINE_DIR/model"
-
-echo "=========================================="
-echo "  知识库助手 — 离线安装"
-echo "=========================================="
-
-# 1. 创建虚拟环境
-echo ""
-echo "[1/3] 创建 Python 虚拟环境..."
-python3 -m venv venv
-source venv/bin/activate
-
-# 2. 离线安装依赖
-echo ""
-echo "[2/3] 安装 Python 依赖（离线）..."
-pip install --no-index --find-links="$WHEELS_DIR" -r requirements.txt
-
-# 3. 更新配置，使用本地模型路径
-echo ""
-echo "[3/3] 配置本地 Embedding 模型路径..."
-python3 -c "
-import yaml
-with open('config.yaml', 'r', encoding='utf-8') as f:
-    config = yaml.safe_load(f)
-config['embedding']['local_path'] = '$MODEL_DIR'
-with open('config.yaml', 'w', encoding='utf-8') as f:
-    yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
-print('已更新 config.yaml，Embedding 模型指向本地路径')
-"
-
-echo ""
-echo "=========================================="
-echo "  安装完成！"
-echo "=========================================="
-echo ""
-echo "后续步骤:"
-echo "  1. 将 Markdown/PDF/TXT 文档放入 knowledge/ 目录"
-echo "  2. 运行入库:  python scripts/ingest.py"
-echo "  3. 启动服务:  streamlit run app.py --server.port 8501"
-echo ""
-""", encoding="utf-8")
-
-    # 也要写一个 Windows 版的安装说明
-    readme = OUTPUT_DIR / "部署说明.txt"
-    readme.write_text("""知识库助手 - 离线部署说明
-================================
-
-一、准备阶段（在有网的机器上）
-  1. 运行 python scripts/prepare_offline.py
-  2. 将生成的 knowledge_offline/ 整个目录拷贝到 U 盘
-
-二、Windows 部署
-  1. 将 knowledge_offline/ 拷贝到目标机器
-  2. 进入 knowledge_offline/project/ 目录
-  3. 双击运行 install_offline.bat
-  4. 将知识库文档放入 knowledge/ 目录
-  5. 入库:  venv\\Scripts\\activate && python scripts/ingest.py
-  6. 启动:  venv\\Scripts\\activate && streamlit run app.py --server.port 8501
-
-三、Linux 部署
-  1. 将 knowledge_offline/ 拷贝到目标机器
-  2. 进入 knowledge_offline/project/ 目录
-  3. 给安装脚本加执行权限:  chmod +x install_offline.sh
-  4. 运行安装:  ./install_offline.sh
-  5. 将知识库文档放入 knowledge/ 目录
-  6. 入库:  source venv/bin/activate && python scripts/ingest.py
-  7. 启动:  source venv/bin/activate && streamlit run app.py --server.port 8501
-
-四、配置 LLM（部署后修改 config.yaml）
-  - 外部 API: api_base 填远程地址，api_key 填密钥
-  - 本地 vLLM: api_base 填 http://localhost:8000/v1，api_key 填 EMPTY
-
-五、注意事项
-  - 目标机器需要 Python 3.10+
-  - 如果目标机器架构不同（如 ARM），需要在目标架构上下载 wheel
-  - Embedding 模型约 400MB，无需 GPU
-""", encoding="utf-8")
-
-    print(f"离线安装脚本已生成: {install_script}")
-    print(f"Windows 安装脚本已生成: {win_script}")
-
-
-def main():
-    print("知识库助手 — 离线部署打包工具")
+    print(f"项目目录: {PROJECT_DIR}")
+    print(f"输出文件: {OUTPUT_ZIP}")
     print()
 
-    if OUTPUT_DIR.exists():
-        shutil.rmtree(OUTPUT_DIR)
-    OUTPUT_DIR.mkdir()
+    file_count = 0
+    total_size = 0
 
-    # 设置国内镜像
-    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+    with zipfile.ZipFile(OUTPUT_ZIP, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        for root, dirs, files in os.walk(PROJECT_DIR):
+            root_path = Path(root)
 
-    download_wheels()
-    download_model()
-    copy_project()
-    generate_install_script()
+            # 过滤排除的目录（原地修改 dirs 列表）
+            dirs[:] = [d for d in dirs if not should_exclude(root_path / d, PROJECT_DIR)]
 
-    # 统计大小
-    total_size = sum(f.stat().st_size for f in OUTPUT_DIR.rglob("*") if f.is_file())
-    size_mb = total_size / (1024 * 1024)
+            # 跳过被排除的根目录
+            if should_exclude(root_path, PROJECT_DIR):
+                dirs.clear()
+                continue
 
-    print("\n" + "=" * 50)
-    print(f"打包完成！输出目录: {OUTPUT_DIR.absolute()}")
-    print(f"总大小: {size_mb:.1f} MB")
+            for fname in files:
+                file_path = root_path / fname
+                if should_exclude(file_path, PROJECT_DIR):
+                    continue
+
+                arcname = str(file_path.relative_to(PROJECT_DIR))
+                file_size = file_path.stat().st_size
+                total_size += file_size
+
+                zf.write(file_path, arcname)
+                file_count += 1
+
+                if file_count % 100 == 0:
+                    print(f"  已打包 {file_count} 个文件...")
+
+    zip_size = OUTPUT_ZIP.stat().st_size
+    print()
     print("=" * 50)
-    print("\n将 knowledge_offline/ 目录拷贝到目标机器，运行 install_offline.sh 即可")
+    print(f"打包完成！")
+    print(f"  文件数: {file_count}")
+    print(f"  原始大小: {total_size / (1024*1024):.1f} MB")
+    print(f"  压缩后: {zip_size / (1024*1024):.1f} MB")
+    print(f"  输出: {OUTPUT_ZIP}")
+    print("=" * 50)
+
+
+def generate_readme():
+    """生成部署说明。"""
+    readme_path = PROJECT_DIR / "离线部署说明.txt"
+    readme_path.write_text("""知识库助手 - 离线部署说明
+================================
+
+一、部署步骤（Windows）
+
+  1. 将 knowledge_offline.zip 解压到目标机器（如 D:\\knowledge）
+  2. 打开 PowerShell，进入项目目录:
+     cd D:\\knowledge
+  3. 创建虚拟环境（需要 Python 3.11+）:
+     python -m venv venv311
+  4. 激活虚拟环境:
+     .\\venv311\\Scripts\\Activate.ps1
+  5. 离线安装依赖（从 wheels 目录）:
+     pip install --no-index --find-links=wheels -r requirements.txt
+     若缺少 wheels 目录，可用:
+     pip install -r requirements.txt
+  6. 文档入库:
+     python scripts/ingest.py
+  7. 启动服务:
+     streamlit run app.py
+
+二、配置说明
+
+  编辑 config.yaml:
+  - LLM API 地址和密钥
+  - embedding 和 reranker 模型路径（已配置本地缓存路径）
+
+三、注意事项
+  - 目标机器需要 Python 3.11+
+  - embedding 模型约 400MB，无需 GPU
+  - 首次启动加载模型约需 15 秒
+""", encoding="utf-8")
+    print(f"部署说明已生成: {readme_path}")
 
 
 if __name__ == "__main__":
-    main()
+    generate_readme()
+    create_zip()

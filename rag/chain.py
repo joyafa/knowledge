@@ -513,10 +513,12 @@ class RAGChain:
         try:
             search_results = self._retrieve(question, enable_hybrid=enable_hybrid)
         except Exception as e:
-            err_msg = f"检索失败: {str(e)}"
-            audit_log(username, "query", details=err_msg, query=question,
+            import traceback as _tb
+            err_detail = f"检索失败: {str(e)}\n{_tb.format_exc()}"
+            logger.error(err_detail)
+            audit_log(username, "query", details=err_detail, query=question,
                       duration_ms=(time.time() - start_time) * 1000)
-            yield {"status": "error", "message": err_msg}
+            yield {"status": "error", "message": f"检索失败: {str(e)}"}
             return
 
         if not search_results:

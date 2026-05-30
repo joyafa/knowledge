@@ -1,14 +1,14 @@
-"""离线安装包统一构建入口。
+"""离线安装包统一构建入口（PyInstaller 版本）。
 
-在有网络的开发机上运行，下载资源并调用平台构建脚本生成安装包。
+使用 PyInstaller 将应用编译为独立 exe，再用 NSIS 打包为安装程序。
+无需预下载 Python 运行时或 AI 模型——模型在首次运行时自动下载。
 
 使用方式:
     python scripts/build_installer.py --platform windows
-    python scripts/build_installer.py --platform linux
     python scripts/build_installer.py --platform both
-    python scripts/build_installer.py --platform windows --skip-download  # 复用已有资源
 
 前置条件:
+    pip install pyinstaller
     Windows: NSIS 3 已安装（makensis 在 PATH 中）
     Linux: ruby + fpm 已安装
 
@@ -18,11 +18,9 @@
 """
 
 import argparse
-import os
 import shutil
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 # 项目根目录
@@ -30,258 +28,100 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = ROOT_DIR / "scripts"
 INSTALLER_DIR = SCRIPTS_DIR / "installer"
 DIST_DIR = ROOT_DIR / "dist"
-CACHE_DIR = ROOT_DIR / "build_cache"
-
-# Python 嵌入式版本
-PYTHON_VERSION = "3.11.9"
-PYTHON_TAG = "cp311"
-
-# 下载地址
-PYTHON_EMBED_URL = f"https://www.python.org/ftp/python/{PYTHON_VERSION}/python-{PYTHON_VERSION}-embed-amd64.zip"
-PYTHON_STANDALONE_URL = (
-    "https://github.com/indygreg/python-build-standalone/releases/download/"
-    "20241016/cpython-3.11.10+20241016-x86_64-unknown-linux-gnu-install_only.tar.gz"
-)
-GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
-
-# Embedding 模型
-EMBEDDING_MODEL = "shibing624/text2vec-base-chinese"
-# Reranker 模型
-RERANKER_MODEL = "BAAI/bge-reranker-base"
 
 
-def download_file(url: str, dest: Path, desc: str = ""):
-    """下载文件（带进度提示）。"""
-    if dest.exists():
-        print(f"  已存在，跳过: {dest.name}")
-        return
-    print(f"  下载: {desc or dest.name} ...")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    urllib.request.urlretrieve(url, str(dest))
+def check_dependencies(platforms: list[str]):
+    """检查构建依赖是否就绪。"""
+    all_ok = True
 
-
-def download_platform_wheels(platform_name: str, wheels_dir: Path):
-    """为指定平台下载 wheel 文件。"""
-    wheels_dir.mkdir(parents=True, exist_ok=True)
-
-    platform_map = {
-        "windows": {
-            "platform": "win_amd64",
-            "extra_args": [],
-        },
-        "linux": {
-            "platform": "manylinux2014_x86_64",
-            "extra_args": [],
-        },
-    }
-
-    info = platform_map[platform_name]
-    print(f"  为 {platform_name} ({info['platform']}) 下载 wheel 文件...")
-
-    cmd = [
-        sys.executable, "-m", "pip", "download",
-        "-r", str(ROOT_DIR / "requirements.txt"),
-        "-d", str(wheels_dir),
-        "--python-version", "3.11",
-        "--platform", info["platform"],
-        "--only-binary=:all:",
-    ] + info["extra_args"]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    # 检查 PyInstaller
+    result = subprocess.run(
+        [sys.executable, "-m", "PyInstaller", "--version"],
+        capture_output=True, text=True
+    )
     if result.returncode != 0:
-        # 有些纯 Python 包不需要指定平台，回退到普通下载
-        print(f"  部分包平台下载失败，使用通用模式...")
-        subprocess.check_call([
-            sys.executable, "-m", "pip", "download",
-            "-r", str(ROOT_DIR / "requirements.txt"),
-            "-d", str(wheels_dir),
-        ])
-        return
-
-    # torch 需要从 CPU 索引下载
-    print("  下载 torch CPU 版本...")
-    torch_dir = wheels_dir / "_torch_cpu"
-    torch_dir.mkdir(exist_ok=True)
-    torch_result = subprocess.run([
-        sys.executable, "-m", "pip", "download",
-        "torch", "torchvision", "torchaudio",
-        "-d", str(torch_dir),
-        "--index-url", "https://download.pytorch.org/whl/cpu",
-        "--python-version", "3.11",
-        "--platform", info["platform"],
-        "--only-binary=:all:",
-    ] + info["extra_args"], capture_output=True, text=True)
-
-    if torch_result.returncode == 0:
-        # 用 CPU 版替换之前下载的 torch wheel
-        for f in torch_dir.glob("torch-*.whl"):
-            for old in wheels_dir.glob("torch-*.whl"):
-                if "cpu" not in old.name.lower():
-                    old.unlink()
-                    print(f"  替换: {old.name} → {f.name}")
-            shutil.copy2(f, wheels_dir / f.name)
-        for f in torch_dir.glob("torchvision-*.whl"):
-            shutil.copy2(f, wheels_dir / f.name)
-        for f in torch_dir.glob("torchaudio-*.whl"):
-            shutil.copy2(f, wheels_dir / f.name)
-        shutil.rmtree(torch_dir, ignore_errors=True)
+        print("  错误: PyInstaller 未安装，请运行: pip install pyinstaller")
+        all_ok = False
     else:
-        shutil.rmtree(torch_dir, ignore_errors=True)
-        print(f"  torch CPU 版下载失败，保留通用版本")
+        print(f"  PyInstaller: {result.stdout.strip()}")
 
-
-def download_model_safe(model_name: str, model_dir: Path, model_type: str = ""):
-    """下载并保存模型（embedding 或 reranker）。
-
-    Args:
-        model_name: HuggingFace 模型名
-        model_dir: 保存目录
-        model_type: 模型类型标签（用于日志）
-    """
-    if model_dir.exists() and any(model_dir.iterdir()):
-        print(f"  {model_type}模型已存在: {model_dir}")
-        return
-    model_dir.mkdir(parents=True, exist_ok=True)
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-    
-    if "bge-reranker" in model_name:
-        from sentence_transformers import CrossEncoder
-        print(f"  下载 {model_type}模型: {model_name}")
-        m = CrossEncoder(model_name)
-        m.model.save_pretrained(str(model_dir))
-        # 同时保存 tokenizer
-        m.tokenizer.save_pretrained(str(model_dir))
-    else:
-        from sentence_transformers import SentenceTransformer
-        print(f"  下载 {model_type}模型: {model_name}")
-        m = SentenceTransformer(model_name)
-        m.save(str(model_dir))
-    
-    print(f"  {model_type}模型已保存: {model_dir}")
-
-
-def download_embedding_model(model_dir: Path):
-    """下载 embedding 模型（兼容旧接口）。"""
-    download_model_safe(EMBEDDING_MODEL, model_dir, "Embedding ")
-
-
-def download_reranker_model(model_dir: Path):
-    """下载 reranker 模型。"""
-    download_model_safe(RERANKER_MODEL, model_dir, "Reranker ")
-
-
-def copy_project_code(dest: Path):
-    """复制项目代码到目标目录。"""
-    if dest.exists():
-        shutil.rmtree(dest)
-
-    includes = [
-        "app.py", "config.yaml", "requirements.txt",
-        "rag", "scripts", "knowledge", "ui", "services",
-    ]
-
-    for item in includes:
-        src = ROOT_DIR / item
-        dst = dest / item
-        if src.is_dir():
-            shutil.copytree(src, dst)
-        elif src.exists():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-
-
-def phase_download(platforms: list[str], skip_download: bool):
-    """Phase 1: 下载所有资源。"""
-    print("\n" + "=" * 60)
-    print("Phase 1: 下载资源")
-    print("=" * 60)
-
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-    if skip_download:
-        print("跳过下载（使用已有资源）")
-        return
-
-    # 下载 wheel 文件
-    for plat in platforms:
-        wheels_dir = CACHE_DIR / f"wheels_{plat}"
-        download_platform_wheels(plat, wheels_dir)
-
-    # 下载 embedding 模型和 reranker 模型
-    download_embedding_model(CACHE_DIR / "model" / "embedding")
-    download_reranker_model(CACHE_DIR / "model" / "reranker")
-
-    # 下载 Python 运行时
+    # 检查 NSIS (Windows)
     if "windows" in platforms:
-        download_file(PYTHON_EMBED_URL, CACHE_DIR / f"python-{PYTHON_VERSION}-embed-amd64.zip",
-                      f"Python {PYTHON_VERSION} Embedded (Windows)")
+        if not shutil.which("makensis"):
+            print("  错误: NSIS (makensis) 未找到，请安装 NSIS 3")
+            print("  https://nsis.sourceforge.io/Download")
+            all_ok = False
+        else:
+            result = subprocess.run(["makensis", "/VERSION"], capture_output=True, text=True)
+            print(f"  NSIS: {result.stdout.strip()}")
 
-    if "linux" in platforms:
-        download_file(PYTHON_STANDALONE_URL,
-                      CACHE_DIR / "cpython-3.11.10-x86_64-unknown-linux-gnu-install_only.tar.gz",
-                      "Python Standalone (Linux)")
-
-    # 下载 get-pip.py
-    download_file(GET_PIP_URL, CACHE_DIR / "get-pip.py", "get-pip.py")
-
-    print("\n所有资源下载完成。")
+    return all_ok
 
 
-def phase_build(platforms: list[str]):
-    """Phase 2-3: 调用平台构建脚本。"""
+def phase_build(platforms: list[str], skip_models: bool = False):
+    """构建阶段：调用平台构建脚本。"""
     DIST_DIR.mkdir(parents=True, exist_ok=True)
 
     if "windows" in platforms:
         print("\n" + "=" * 60)
-        print("Phase 2: 构建 Windows 安装包")
+        print("Phase 1: 构建 Windows 安装包")
+        if skip_models:
+            print("  (跳过模型复制 — 快速调试模式)")
         print("=" * 60)
         from build_windows import build_windows
         build_windows(
             root_dir=ROOT_DIR,
-            cache_dir=CACHE_DIR,
+            cache_dir=ROOT_DIR / "build_cache",
             dist_dir=DIST_DIR,
             installer_dir=INSTALLER_DIR,
+            skip_models=skip_models,
         )
 
     if "linux" in platforms:
         print("\n" + "=" * 60)
-        print("Phase 3: 构建 Linux 安装包")
+        print("Phase 2: 构建 Linux 安装包")
         print("=" * 60)
         from build_linux import build_linux
         build_linux(
             root_dir=ROOT_DIR,
-            cache_dir=CACHE_DIR,
+            cache_dir=ROOT_DIR / "build_cache",
             dist_dir=DIST_DIR,
             installer_dir=INSTALLER_DIR,
         )
 
 
 def main():
-    parser = argparse.ArgumentParser(description="构建离线安装包")
+    parser = argparse.ArgumentParser(description="构建离线安装包（PyInstaller 版本）")
     parser.add_argument("--platform", choices=["windows", "linux", "both"],
-                        default="both", help="目标平台（默认 both）")
-    parser.add_argument("--skip-download", action="store_true",
-                        help="跳过资源下载，使用 build_cache 中已有资源")
+                        default="windows", help="目标平台（默认 windows）")
+    parser.add_argument("--skip-models", action="store_true",
+                        help="跳过模型文件复制，加速调试构建")
     args = parser.parse_args()
 
     platforms = ["windows", "linux"] if args.platform == "both" else [args.platform]
 
-    print("知识库智能问答系统 — 离线安装包构建工具")
+    print("知识库智能问答系统 — 离线安装包构建工具 (PyInstaller)")
     print(f"目标平台: {', '.join(platforms)}")
+    print()
+
+    # 检查依赖
+    if not check_dependencies(platforms):
+        sys.exit(1)
 
     # 将 scripts/ 加入 path 以便 import 构建模块
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-    phase_download(platforms, args.skip_download)
-    phase_build(platforms)
+    # 直接构建（无需下载资源——PyInstaller 已包含所有依赖，模型运行时自动下载）
+    phase_build(platforms, skip_models=args.skip_models)
 
     print("\n" + "=" * 60)
     print("构建完成！输出目录: dist/")
     print("=" * 60)
 
     for f in DIST_DIR.iterdir():
-        size_mb = f.stat().st_size / (1024 * 1024)
-        print(f"  {f.name} ({size_mb:.1f} MB)")
+        if f.is_file() and f.suffix in (".exe", ".deb"):
+            size_mb = f.stat().st_size / (1024 * 1024)
+            print(f"  {f.name} ({size_mb:.1f} MB)")
 
 
 if __name__ == "__main__":

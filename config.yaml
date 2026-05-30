@@ -1,9 +1,16 @@
 # API 智能助手配置文件
 # 支持 ${ENV_VAR} 和 ${ENV_VAR:-默认值} 环境变量替换
 
+# 应用版本号（构建时自动更新）
+version: "0.8.17"
+
+# 本地模型根目录（离线部署时通过环境变量 MODEL_ROOT 指定绝对路径）
+# 开发环境默认 ./model，打包后由安装脚本设置
+model_root: "${MODEL_ROOT:-model}"
+
 llm:
-  api_base: "${LLM_API_BASE:-https://open.bigmodel.cn/api/paas/v4}"
-  api_key: "${LLM_API_KEY:-EMPTY}"
+  api_base: "https://open.bigmodel.cn/api/paas/v4"
+  api_key: "${BIGMODEL_API_KEY:-}"
   model: "glm-4-flash"
   temperature: 0.3
   max_tokens: 2048
@@ -11,16 +18,29 @@ llm:
 
 embedding:
   model: "shibing624/text2vec-base-chinese"
-  local_path: ""
+  # 本地模型路径（离线模式），相对于 model_root
+  # 留空则首次运行时自动从 HuggingFace 下载
+  # 可通过 EMBEDDING_LOCAL_PATH 环境变量覆盖（启动脚本自动检测）
+  local_path: "${EMBEDDING_LOCAL_PATH:-}"
+
+# 重排序模型（Cross-Encoder Reranker）
+reranker:
+  model: "BAAI/bge-reranker-base"
+  # 本地模型路径（离线模式），相对于 model_root
+  # 留空则首次运行时自动从 HuggingFace 下载
+  # 可通过 RERANKER_LOCAL_PATH 环境变量覆盖（启动脚本自动检测）
+  local_path: "${RERANKER_LOCAL_PATH:-}"
 
 vectorstore:
-  persist_directory: "./chroma_db"
+  persist_directory: "./data/chroma_db"
   collection_name: "knowledge_base"
   top_k: 5
-  distance_threshold: 400
+  # 距离阈值（平方L2距离，当前嵌入未归一化，需设较大值）
+  # TODO: 嵌入归一化后调整为 1.5
+  distance_threshold: 10000
 
 knowledge:
-  docs_directory: "./knowledge"
+  docs_directory: "./data/knowledge"
   chunk_size: 500
   chunk_overlap: 50
 
@@ -41,5 +61,6 @@ ui:
   title: "诊断软件智能问答终端"
   subtitle: "知识库检索 · 接口查询 · 参数说明 · 代码示例"
   company_name: "南昌市星纬软件开发有限公司"
+  company_url: "http://www.thinkcar.cn"
   logo_text: "◈"
   default_theme: "dark"

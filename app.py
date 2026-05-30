@@ -8,6 +8,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# ChromaDB: 禁用遥测，避免 posthog 版本不兼容导致 capture() 参数错误
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+# 使用国内 HuggingFace 镜像
+os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -15,9 +21,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rag.config import get_config
 from rag.logging_config import setup_logging
 from rag.preload import start as start_preload, is_done, get_chain
-
-# 使用国内 HuggingFace 镜像
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 
 def init_session_state():
@@ -92,11 +95,13 @@ def main():
 def _render_chat_page(config):
     ui_cfg = config.ui
     from ui import render_logo_img
+    from rag import __version__
     st.markdown(f"""
     <div style="padding: 12px 0 4px 0;">
         {render_logo_img(width=48)}
         <span style="font-size:1.3em;font-weight:600;margin-left:8px;">{ui_cfg.title}</span>
         <span style="color:#888;font-size:0.8em;margin-left:16px;">{ui_cfg.subtitle}</span>
+        <span style="color:#aaa;font-size:0.75em;margin-left:12px;">v{__version__}</span>
     </div>
     """, unsafe_allow_html=True)
 

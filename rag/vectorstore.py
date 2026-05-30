@@ -9,6 +9,14 @@ from typing import Optional
 
 import chromadb
 
+# 禁用 ChromaDB 遥测：posthog 版本不兼容导致 capture() 签名错误
+# 环境变量方式在 chromadb 0.5.x 中不足以阻止遥测初始化，需直接拦截
+try:
+    import chromadb.telemetry.product.posthog as _ch_posthog
+    _ch_posthog.Posthog.capture = lambda *args, **kwargs: None
+except Exception:
+    pass
+
 from rag.config import load_config
 from rag.embeddings import ChineseEmbeddingFunction
 from rag.loader import DocumentChunk

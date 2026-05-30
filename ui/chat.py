@@ -7,7 +7,7 @@ import streamlit as st
 
 from rag.config import get_config
 from rag.logging_config import audit_log
-from rag.preload import is_done, get_error as preload_error, reset as preload_reset, start as preload_start
+from rag.preload import is_done, get_error as preload_error, get_error_detail, get_chain as preload_get_chain, reset as preload_reset, start as preload_start
 from services.history import (
     load_session_history,
     save_message,
@@ -34,9 +34,19 @@ def render_chat_panel():
             time.sleep(1.5)
             st.rerun()
         else:
+            # 线程已完成，再检查一次 chain（防止竞态：线程在 init_session_state
+            # 之后、本检查之前恰好完成，此时 is_done 为 True 但 chain 已就绪）
+            chain = preload_get_chain()
+            if chain is not None:
+                st.session_state.chain = chain
+                st.session_state.chain_initialized = True
+                st.rerun()
             err = preload_error()
+            err_detail = get_error_detail()
             st.error(f"❌ 系统初始化失败: {err}")
             st.caption("请检查 config.yaml 中的 LLM API 配置和网络连接")
+            with st.expander("📋 错误详情", expanded=True):
+                st.code(err_detail or "（无额外错误信息）", language="text")
             if st.button("🔄 重试加载"):
                 preload_reset()
                 preload_start()

@@ -14,6 +14,35 @@ from rag.logging_config import get_logger
 logger = get_logger(__name__)
 
 
+def _patch_sentence_transformers():
+    """修复 sentence_transformers 对包元数据 Home-page 为 None 时的崩溃。
+
+    sentence_transformers.util.check_package_availability 通过
+    importlib.metadata.metadata() 获取包元数据，但某些包（如 datasets）的
+    Home-page 字段可能为 None，导致 `owner in meta["Home-page"]` 抛出：
+        TypeError: argument of type 'NoneType' is not iterable
+
+    此补丁包装 importlib.metadata.metadata()，确保返回的元数据中
+    Home-page 等关键字段不会为 None。
+    """
+    import importlib.metadata
+    _original_metadata = importlib.metadata.metadata
+
+    def _safe_metadata(package_name):
+        meta = _original_metadata(package_name)
+        # 确保关键字段不会是 None，避免 sentence_transformers 崩溃
+        for key in ("Home-page", "Author", "Author-email", "Summary"):
+            if meta.get(key) is None:
+                meta[key] = ""
+        return meta
+
+    importlib.metadata.metadata = _safe_metadata
+
+
+# 在导入 SentenceTransformer 之前应用补丁
+_patch_sentence_transformers()
+
+
 class ChineseEmbeddingFunction(EmbeddingFunction):
     """基于 sentence-transformers 的中文 embedding 函数。
 

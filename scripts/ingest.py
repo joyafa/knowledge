@@ -8,8 +8,9 @@ import os
 import sys
 from pathlib import Path
 
-# 使用国内 HuggingFace 镜像
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# 仅在未配置本地模型路径时才设置 HF 镜像（本地模型就绪时无需联网）
+if not (os.environ.get("EMBEDDING_LOCAL_PATH") and os.environ.get("RERANKER_LOCAL_PATH")):
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 # 将项目根目录添加到 Python 路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

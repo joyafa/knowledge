@@ -1,6 +1,7 @@
 """文档加载与分块模块。
 
-支持格式：Markdown (.md)、纯文本 (.txt)、PDF (.pdf)
+支持格式：Markdown (.md)、纯文本 (.txt)、PDF (.pdf)、
+          C/C++ 源码 (.c, .cc, .cpp, .cxx, .h, .hpp, .hxx)
 递归扫描 knowledge/ 目录，按语义切分，保留元数据。
 """
 
@@ -16,7 +17,10 @@ logger = get_logger(__name__)
 
 
 # 支持的文件扩展名
-SUPPORTED_EXTENSIONS = {".md", ".txt", ".pdf"}
+SUPPORTED_EXTENSIONS = {
+    ".md", ".txt", ".pdf",
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx", 
+}
 
 
 @dataclass
@@ -118,6 +122,22 @@ def _load_pdf(file_path: Path) -> str:
     return "\n\n".join(pages)
 
 
+# 编码探测顺序（中文 Windows 源码常见 GBK/GB2312 编码）
+_TEXT_ENCODINGS = ["utf-8", "gbk", "gb2312", "gb18030", "latin-1"]
+
+
+def _read_text_file(file_path: Path) -> str:
+    """读取文本文件，自动探测编码。"""
+    raw = file_path.read_bytes()
+    for enc in _TEXT_ENCODINGS:
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    # 最终兜底：忽略无法解码的字节
+    return raw.decode("utf-8", errors="replace")
+
+
 def _load_file(file_path: Path) -> str:
     """根据文件类型加载文本内容。"""
     ext = file_path.suffix.lower()
@@ -125,7 +145,7 @@ def _load_file(file_path: Path) -> str:
     if ext == ".pdf":
         return _load_pdf(file_path)
     else:
-        return file_path.read_text(encoding="utf-8")
+        return _read_text_file(file_path)
 
 
 def load_documents(
@@ -136,7 +156,7 @@ def load_documents(
 ) -> list[DocumentChunk]:
     """扫描目录并加载所有支持的文档文件，返回分块列表。
 
-    支持格式：.md、.txt、.pdf
+    支持格式：.md、.txt、.pdf、C/C++ 源码（.c/.cc/.cpp/.cxx/.h/.hpp/.hxx）
 
     Args:
         docs_dir: 文档目录路径
@@ -222,15 +242,19 @@ def get_knowledge_files_meta(docs_dir: str) -> list[dict]:
                 title = doc_file.stem
                 size = doc_file.stat().st_size
             else:
-                with open(doc_file, "r", encoding="utf-8") as f:
-                    head = "".join(f.readline() for _ in range(5))
+                head = _read_text_file(doc_file)[:2000]
                 title = _extract_title(head) or doc_file.stem
                 size = doc_file.stat().st_size
         except Exception:
             title = doc_file.stem
             size = 0
 
-        icon = {"pdf": "📕", "txt": "📝"}.get(doc_file.suffix.lower().strip("."), "📄")
+        _icon_map = {
+            "pdf": "📕", "txt": "📝", "md": "📘",
+            "c": "⚙️", "cc": "⚙️", "cpp": "⚙️", "cxx": "⚙️",
+            "h": "📐", "hpp": "📐", "hxx": "📐",
+        }
+        icon = _icon_map.get(doc_file.suffix.lower().lstrip("."), "📄")
         files.append({
             "path": str(doc_file.relative_to(docs_path)),
             "name": doc_file.name,

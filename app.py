@@ -11,8 +11,9 @@ from pathlib import Path
 # ChromaDB: 禁用遥测，避免 posthog 版本不兼容导致 capture() 参数错误
 os.environ.setdefault("CHROMA_TELEMETRY", "False")
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-# 使用国内 HuggingFace 镜像
-os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+# 仅在未配置本地模型路径时才设置 HF 镜像（本地模型就绪时无需联网）
+if not (os.environ.get("EMBEDDING_LOCAL_PATH") and os.environ.get("RERANKER_LOCAL_PATH")):
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 import streamlit as st
 
@@ -21,6 +22,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rag.config import get_config
 from rag.logging_config import setup_logging
 from rag.preload import start as start_preload, is_done, get_chain
+
+
+def _check_admin(username: str, config) -> bool:
+    """判断用户是否为管理员（兼容 auth 服务与旧版 admin_users）。"""
+    if config.auth.enabled:
+        from services.auth import get_user_manager
+        um = get_user_manager(config.auth.users_file)
+        if um.user_exists(username):
+            return um.is_admin(username)
+    return username in config.admin_users
 
 
 def init_session_state():
@@ -76,8 +87,11 @@ def main():
     init_session_state()
 
     username = st.session_state.get("username", "")
+    authenticated = st.session_state.get("authenticated", False)
 
-    if not username:
+    # 认证检查：auth.enabled 时需要密码验证，否则仅需用户名
+    auth_required = config.auth.enabled and not authenticated
+    if not username or auth_required:
         from ui.login import render_login_screen
         render_login_screen(config)
         return
@@ -88,6 +102,8 @@ def main():
     page = st.session_state.get("page", "chat")
     if page == "dashboard":
         _render_dashboard()
+    elif page == "admin":
+        _render_admin_page(config)
     else:
         _render_chat_page(config)
 
@@ -100,8 +116,8 @@ def _render_chat_page(config):
     <div style="padding: 12px 0 4px 0;">
         {render_logo_img(width=48)}
         <span style="font-size:1.3em;font-weight:600;margin-left:8px;">{ui_cfg.title}</span>
-        <span style="color:#888;font-size:0.8em;margin-left:16px;">{ui_cfg.subtitle}</span>
-        <span style="color:#aaa;font-size:0.75em;margin-left:12px;">v{__version__}</span>
+        <span style="color:var(--text-secondary);font-size:0.8em;margin-left:16px;">{ui_cfg.subtitle}</span>
+        <span style="color:var(--text-muted);font-size:0.75em;margin-left:12px;">v{__version__}</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -113,7 +129,8 @@ def _render_dashboard():
     from services.analytics import get_dashboard_stats
     config = get_config()
     username = st.session_state.get("username", "")
-    is_admin = username in config.admin_users
+    # 管理员判断（兼容 auth 服务与旧版 admin_users）
+    is_admin = _check_admin(username, config)
 
     # 顶栏：返回 + 管理员切换
     col_back, col_toggle = st.columns([1, 5])
@@ -187,6 +204,32 @@ def _render_dashboard():
         file_name=f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
         mime="text/markdown",
     )
+
+
+def _render_admin_page(config):
+    """渲染管理员面板（仅管理员可访问）。"""
+    username = st.session_state.get("username", "")
+    is_admin = _check_admin(username, config)
+
+    if not is_admin:
+        st.error("⚠️ 权限不足：仅管理员可访问此页面")
+        if st.button("← 返回对话", key="admin_back_to_chat"):
+            st.session_state.page = "chat"
+            st.rerun()
+        return
+
+    try:
+        from ui.admin import render_admin_panel
+        with st.spinner("正在加载管理面板..."):
+            render_admin_panel(config)
+    except Exception as e:
+        import traceback
+        st.error(f"⚠️ 管理面板加载失败: {e}")
+        with st.expander("查看详细错误", expanded=False):
+            st.code(traceback.format_exc())
+        if st.button("← 返回对话", key="admin_error_back"):
+            st.session_state.page = "chat"
+            st.rerun()
 
 
 if __name__ == "__main__":

@@ -65,6 +65,8 @@ class RerankerConfig(BaseModel):
     """Cross-Encoder Reranker 模型配置。"""
     model: str = "BAAI/bge-reranker-base"
     local_path: str = ""
+    enabled: bool = True
+    top_n: int = Field(default=10, ge=1, le=50)
 
 
 class VectorStoreConfig(BaseModel):
@@ -106,6 +108,14 @@ class UIConfig(BaseModel):
     default_theme: str = Field(default="dark", pattern="^(dark|light)$")
 
 
+class AuthConfig(BaseModel):
+    """用户认证配置。"""
+    enabled: bool = True
+    users_file: str = "./data/users.json"
+    min_password_length: int = Field(default=4, ge=2, le=64)
+    admin_users: list[str] = []
+
+
 class AppConfig(BaseModel):
     """应用全局配置。"""
     # 应用版本号
@@ -119,6 +129,7 @@ class AppConfig(BaseModel):
     knowledge: KnowledgeConfig = Field(default_factory=KnowledgeConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     # 多轮对话配置
     max_conversation_turns: int = Field(default=10, ge=0, le=50)
     # 审计日志
@@ -183,6 +194,8 @@ def load_config(config_path: str = "config.yaml") -> dict:
         "reranker": {
             "model": config.reranker.model,
             "local_path": config.reranker.local_path,
+            "enabled": config.reranker.enabled,
+            "top_n": config.reranker.top_n,
         },
         "vectorstore": {
             "persist_directory": config.vectorstore.persist_directory,
@@ -197,5 +210,11 @@ def load_config(config_path: str = "config.yaml") -> dict:
             "temperature": config.llm.temperature,
             "max_tokens": config.llm.max_tokens,
             "context_window": config.llm.context_window,
+        },
+        "auth": {
+            "enabled": config.auth.enabled,
+            "users_file": config.auth.users_file,
+            "min_password_length": config.auth.min_password_length,
+            "admin_users": config.auth.admin_users,
         },
     }

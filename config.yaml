@@ -13,7 +13,7 @@ llm:
   api_key: "${BIGMODEL_API_KEY:-}"
   model: "glm-4-flash"
   temperature: 0.3
-  max_tokens: 2048
+  max_tokens: 1024
   context_window: 32768
 
 embedding:
@@ -30,6 +30,10 @@ reranker:
   # 留空则首次运行时自动从 HuggingFace 下载
   # 可通过 RERANKER_LOCAL_PATH 环境变量覆盖（启动脚本自动检测）
   local_path: "${RERANKER_LOCAL_PATH:-}"
+  # 是否启用 Reranker 精排（禁用可大幅加速响应，但可能降低检索精度）
+  enabled: true
+  # 只对前 N 个候选文档进行精排（减少 Cross-Encoder 计算量）
+  top_n: 10
 
 vectorstore:
   persist_directory: "./data/chroma_db"
@@ -50,6 +54,14 @@ rate_limit:
   max_requests_per_minute: 30
   max_input_length: 2000
 
+# 用户认证
+auth:
+  enabled: true
+  users_file: "./data/users.json"
+  min_password_length: 4
+  # 管理员用户名列表（兼容旧配置，auth.enabled=true 时由 users.json 中的 role 决定）
+  admin_users: []
+
 # 多轮对话
 max_conversation_turns: 10
 
@@ -58,7 +70,7 @@ audit_enabled: true
 
 # UI 自定义
 ui:
-  title: "诊断软件智能问答终端"
+  title: "诊断软件智能问答系统"
   subtitle: "知识库检索 · 接口查询 · 参数说明 · 代码示例"
   company_name: "南昌市星纬软件开发有限公司"
   company_url: "http://www.thinkcar.cn"

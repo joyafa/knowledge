@@ -10,7 +10,19 @@ from rag.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-SUPPORTED_EXTENSIONS = {".md", ".txt", ".pdf"}
+# 编码探测顺序（中文 Windows 源码常见 GBK/GB2312 编码）
+_TEXT_ENCODINGS = ["utf-8", "gbk", "gb2312", "gb18030", "latin-1"]
+
+
+def _read_text_file(file_path: Path) -> str:
+    """读取文本文件，自动探测编码。"""
+    raw = file_path.read_bytes()
+    for enc in _TEXT_ENCODINGS:
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", errors="replace")
 
 
 def read_full_content(docs_dir: str, relative_path: str) -> Optional[str]:
@@ -39,7 +51,7 @@ def read_full_content(docs_dir: str, relative_path: str) -> Optional[str]:
             except Exception:
                 pass
         else:
-            return file_path.read_text(encoding="utf-8")
+            return _read_text_file(file_path)
     except Exception as e:
         logger.warning("读取文件失败 %s: %s", file_path, e)
         return None

@@ -167,6 +167,7 @@ excludes = [
     "notebook",
     "tkinter",
     "test",
+    "torch.classes",  # C++ 扩展命名空间，PyInstaller 无法分析，排除以消除警告
 ]
 
 a = Analysis(

@@ -38,16 +38,24 @@ def start():
 
 
 def _load():
-    """在后台线程中加载 RAGChain。"""
+    """在后台线程中加载 RAGChain 并预热模型。"""
     try:
         logger.info("正在加载 RAGChain（包含 embedding 模型，约需 15 秒）...")
         from rag.chain import RAGChain
+        from rag.config import load_config
         chain = RAGChain.from_config()
         state["chain"] = chain
         state["error"] = None
         state["error_traceback"] = ""
         state["error_log_file"] = ""
         logger.info("RAGChain 加载完成 ✅")
+
+        # 预热 Reranker 模型（避免首次查询时等待加载）
+        try:
+            config = load_config()
+            RAGChain.warmup_reranker(config)
+        except Exception as e:
+            logger.warning("Reranker 预热跳过: %s", e)
     except Exception as e:
         # 确保错误信息不为空：优先使用异常消息，回退为异常类名
         err_msg = str(e).strip() if str(e).strip() else type(e).__name__

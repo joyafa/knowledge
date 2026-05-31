@@ -28,7 +28,7 @@ def render_chat_panel():
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:100px 0;">
                 <div style="font-size:2.5em;margin-bottom:16px;">⏳</div>
                 <div style="font-size:1.1em;font-weight:500;">系统初始化中，正在加载检索引擎...</div>
-                <div style="font-size:0.8em;color:#aaa;margin-top:8px;">首次加载约需 15 秒，请稍候</div>
+                <div style="font-size:0.8em;color:var(--text-muted);margin-top:8px;">首次加载约需 15 秒，请稍候</div>
             </div>
             """, unsafe_allow_html=True)
             time.sleep(1.5)
@@ -63,6 +63,7 @@ def render_chat_panel():
                 "role": msg["role"],
                 "content": msg["content"],
                 "timestamp": msg.get("timestamp", ""),
+                "sources": msg.get("sources", []),
             })
         st.session_state.history_loaded = True
 
@@ -73,6 +74,10 @@ def render_chat_panel():
             if ts:
                 st.caption(ts)
             st.markdown(message["content"])
+
+            # 渲染参考来源（可点击展开查看）
+            if message["role"] == "assistant" and message.get("sources"):
+                _render_message_sources(message["sources"], i, config)
 
             if message["role"] == "assistant" and message.get("content", "").strip():
                 _render_feedback(i, username, message)
@@ -177,14 +182,6 @@ def _process_query(prompt: str, username: str, config):
                         full_response = f"知识库中暂无与「{prompt[:50]}」相关的内容。\n\n请确认文档已入库，或尝试换一种问法。"
                         placeholder.info(full_response)
                     else:
-                        if sources_info:
-                            src = "\n\n---\n**📖 参考来源：**\n"
-                            for s in sources_info:
-                                src += f"- `{s['source']}`"
-                                if s.get("title"):
-                                    src += f"（{s['title']}）"
-                                src += "\n"
-                            full_response += src
                         placeholder.markdown(full_response)
                 elif status == "error":
                     full_response = f"系统异常: {event.get('message', '未知错误')}"
@@ -195,5 +192,31 @@ def _process_query(prompt: str, username: str, config):
 
     st.session_state.messages.append({
         "role": "assistant", "content": full_response, "timestamp": answer_time,
+        "sources": sources_info,
     })
-    save_message(username, full_response, role="assistant", timestamp=answer_time, session_id=session_id)
+    save_message(username, full_response, role="assistant", timestamp=answer_time, session_id=session_id, sources=sources_info)
+
+    # 立即渲染参考来源（首次响应时消息循环还未包含本条消息）
+    if sources_info:
+        msg_index = len(st.session_state.messages) - 1
+        _render_message_sources(sources_info, msg_index, config)
+
+
+def _render_message_sources(sources: list, msg_index: int, config):
+    """渲染参考来源列表（仅显示来源信息，不展开查看文件内容）。
+
+    Args:
+        sources: [{"source": str, "title": str}, ...]
+        msg_index: 消息索引（用于生成唯一 key）
+        config: 应用配置
+    """
+    if not sources:
+        return
+
+    st.markdown("**📖 参考来源：**")
+
+    for j, s in enumerate(sources):
+        source_path = s["source"]
+        title = s.get("title", "")
+        display_name = title if title else source_path
+        st.caption(f"📄 {display_name}  `{source_path}`")

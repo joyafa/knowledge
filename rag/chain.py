@@ -201,6 +201,7 @@ class RAGChain:
     # 类级别缓存：避免每次查询都重新加载 Reranker 模型
     _reranker_model: Optional[object] = None
     _reranker_model_name: Optional[str] = None
+    _reranker_load_failed: bool = False  # 加载失败标记，避免重复尝试
 
     def __init__(self, vectorstore: VectorStore, config: dict):
         self._vectorstore = vectorstore
@@ -315,12 +316,13 @@ class RAGChain:
                 self._ensure_bm25_ready()
                 if self._bm25:
                     bm25_indices = self._bm25.search(query, top_k=top_k * 2)
-                    all_docs_for_bm25 = self._vectorstore.get_all_documents()
+                    # 直接复用 BM25 索引中已缓存的文档（避免每次查询全量加载 ChromaDB）
+                    bm25_corpus = self._bm25._corpus
                     for idx, score in bm25_indices:
-                        if idx < len(all_docs_for_bm25):
+                        if idx < len(bm25_corpus):
                             bm25_results.append({
-                                "content": all_docs_for_bm25[idx]["content"],
-                                "metadata": all_docs_for_bm25[idx]["metadata"],
+                                "content": bm25_corpus[idx]["content"],
+                                "metadata": bm25_corpus[idx]["metadata"],
                                 "bm25_score": score,
                             })
             except Exception as e:
@@ -352,18 +354,34 @@ class RAGChain:
         使用本地轻量 reranker 模型对检索结果重排序。
         模型在类级别缓存，避免每次查询重新加载。
         支持从配置的 local_path 离线加载，否则从 HuggingFace 在线下载。
+        可通过配置 reranker.enabled=false 禁用，大幅加速响应。
         """
+        reranker_cfg = self._config.get("reranker", {})
+        if not reranker_cfg.get("enabled", True):
+            return results
+
         if len(results) <= 1:
             return results
 
+        # 只对前 top_n 个候选文档进行精排（减少 Cross-Encoder 计算量）
+        top_n = reranker_cfg.get("top_n", 10)
+        candidates = results[:top_n]
+        rest = results[top_n:]
+
         try:
-            reranker_cfg = self._config.get("reranker", {})
             reranker_model_name = reranker_cfg.get("model", "BAAI/bge-reranker-base")
             reranker_local_path = reranker_cfg.get("local_path", "")
 
             # 有本地路径且存在则离线加载，否则用 HuggingFace 模型名在线加载
             use_local = bool(reranker_local_path and Path(reranker_local_path).exists())
             resolved = reranker_local_path if use_local else reranker_model_name
+
+            # 上次加载已失败且非本地路径 → 直接跳过（避免反复超时）
+            if RAGChain._reranker_load_failed and not use_local:
+                if RAGChain._reranker_model_name == resolved:
+                    return results
+                # 模型名变了，重置失败标记再试一次
+                RAGChain._reranker_load_failed = False
 
             # 类级别缓存：只在首次或路径变化时加载
             if (RAGChain._reranker_model is None or
@@ -372,20 +390,23 @@ class RAGChain:
                 logger.debug("正在加载 Reranker 模型: %s", resolved)
                 if use_local:
                     logger.debug("（从本地路径离线加载）")
-                RAGChain._reranker_model = CrossEncoder(resolved)
+                RAGChain._reranker_model = CrossEncoder(resolved, local_files_only=use_local)
                 RAGChain._reranker_model_name = resolved
                 logger.debug("Reranker 模型加载完成（已缓存）")
 
-            pairs = [[query, r["content"]] for r in results]
+            pairs = [[query, r["content"]] for r in candidates]
             scores = RAGChain._reranker_model.predict(pairs)
             for i, score in enumerate(scores):
-                results[i]["rerank_score"] = float(score)
-            results.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
-            logger.debug("Reranker 重排序完成")
+                candidates[i]["rerank_score"] = float(score)
+            candidates.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
+            logger.debug("Reranker 重排序完成 (%d 个候选)", len(candidates))
         except Exception as e:
             logger.debug("Reranker 不可用，跳过: %s", e)
+            if not use_local:
+                RAGChain._reranker_load_failed = True
 
-        return results
+        # 精排后的候选 + 未参与精排的剩余文档（保持原序）
+        return candidates + rest
 
     def _build_context(self, search_results: list[dict], budget_tokens: int, low_confidence: bool = False) -> str:
         """将检索结果拼接为上下文字符串，自动裁剪以适配上下文窗口。
@@ -690,3 +711,35 @@ class RAGChain:
         config = load_config(config_path)
         vectorstore = VectorStore.from_config(config_path)
         return cls(vectorstore=vectorstore, config=config)
+
+    @classmethod
+    def warmup_reranker(cls, config: dict):
+        """预热 Reranker 模型（后台线程调用，避免首次查询等待）。
+
+        仅在配置启用 reranker 时加载模型到类级别缓存。
+        """
+        reranker_cfg = config.get("reranker", {})
+        if not reranker_cfg.get("enabled", True):
+            logger.info("Reranker 已禁用，跳过预热")
+            return
+        try:
+            model_name = reranker_cfg.get("model", "BAAI/bge-reranker-base")
+            local_path = reranker_cfg.get("local_path", "")
+            use_local = bool(local_path and Path(local_path).exists())
+            resolved = local_path if use_local else model_name
+            if cls._reranker_model is not None and cls._reranker_model_name == resolved:
+                logger.info("Reranker 模型已缓存，跳过预热")
+                return
+            if cls._reranker_load_failed and not use_local:
+                logger.info("Reranker 上次加载失败，跳过预热")
+                return
+            from sentence_transformers import CrossEncoder
+            logger.info("预热 Reranker 模型: %s", resolved)
+            cls._reranker_model = CrossEncoder(resolved, local_files_only=use_local)
+            cls._reranker_model_name = resolved
+            cls._reranker_load_failed = False
+            logger.info("Reranker 模型预热完成")
+        except Exception as e:
+            logger.warning("Reranker 预热失败（将在首次查询时重试）: %s", e)
+            if not use_local:
+                cls._reranker_load_failed = True

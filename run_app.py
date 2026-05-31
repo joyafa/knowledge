@@ -209,29 +209,37 @@ def main():
     # PyInstaller 打包后修复 DLL 搜索路径（解决 torch c10.dll 及各类 DLL 加载失败）
     _patch_dll_search_path(app_root)
 
-    # 环境变量设置
-    os.environ["MODEL_ROOT"] = str(app_root / "model")
-    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-    # 统一模型缓存到 model/ 目录，便于打包脚本收集
-    os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(app_root / "model"))
-
     # 检测本地模型（优先使用本地模型，避免首次启动联网下载）
     # 打包脚本会将模型复制到 model/text2vec-base-chinese/ 和 model/bge-reranker-base/
     model_dir = app_root / "model"
     emb_local = model_dir / "text2vec-base-chinese"
     reranker_local = model_dir / "bge-reranker-base"
 
-    if emb_local.exists():
+    has_local_emb = emb_local.exists()
+    has_local_reranker = reranker_local.exists()
+
+    if has_local_emb:
         os.environ["EMBEDDING_LOCAL_PATH"] = str(emb_local)
         print(f"  [MODEL] 检测到本地 Embedding 模型: {emb_local}")
     else:
         print(f"  [MODEL] 未检测到本地 Embedding 模型，首次运行将自动下载")
 
-    if reranker_local.exists():
+    if has_local_reranker:
         os.environ["RERANKER_LOCAL_PATH"] = str(reranker_local)
         print(f"  [MODEL] 检测到本地 Reranker 模型: {reranker_local}")
     else:
         print(f"  [MODEL] 未检测到本地 Reranker 模型，首次运行将自动下载")
+
+    # ── 环境变量 ──
+    os.environ["MODEL_ROOT"] = str(model_dir)
+    os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(model_dir))
+
+    # 仅在缺少本地模型时才设置 HF 镜像（本地模型就绪时无需联网）
+    if not (has_local_emb and has_local_reranker):
+        os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    else:
+        os.environ.pop("HF_ENDPOINT", None)  # 清除可能的残留，避免无谓联网尝试
+        print(f"  [MODEL] 全部模型已本地就绪，禁用 HuggingFace 联网")
 
     # 确保运行时目录
     ensure_dirs(app_root)

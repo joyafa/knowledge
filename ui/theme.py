@@ -9,6 +9,15 @@ import streamlit as st
 
 DARK_THEME = """
 <style>
+/* ── 语义化颜色变量（供内联 HTML 通过 var() 引用） ── */
+.stApp {
+    --text-primary: #e2e8f0;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --bg-card: rgba(30, 30, 50, 0.7);
+    --border-color: rgba(99, 102, 241, 0.15);
+}
+
 /* 全局基底 */
 .stApp {
     background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%) !important;
@@ -114,6 +123,15 @@ code { color: #c4b5fd !important; background: rgba(99, 102, 241, 0.12) !importan
 
 LIGHT_THEME = """
 <style>
+/* ── 语义化颜色变量（供内联 HTML 通过 var() 引用） ── */
+.stApp {
+    --text-primary: #1e293b;
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+    --bg-card: #ffffff;
+    --border-color: #e2e8f0;
+}
+
 .stApp {
     background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 50%, #e2e8f0 100%) !important;
     color: #1e293b !important;

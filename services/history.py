@@ -196,16 +196,21 @@ def save_message(
     role: str = "user",
     timestamp: str = "",
     session_id: str = "",
+    sources: list = None,
 ):
     """保存一条消息到当前会话。"""
     if not timestamp:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    msg = {"role": role, "content": content, "timestamp": timestamp}
+    if sources:
+        msg["sources"] = sources
+
     # 新格式：按会话存储
     if session_id:
         sf = _session_file(username, session_id)
         history = load_session_history(username, session_id)
-        history.append({"role": role, "content": content, "timestamp": timestamp})
+        history.append(msg)
         sf.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 兼容旧格式：也存到按日期的文件
@@ -216,7 +221,7 @@ def save_message(
             old_history = json.loads(old_file.read_text(encoding="utf-8"))
         except Exception:
             old_history = []
-    old_history.append({"role": role, "content": content, "timestamp": timestamp})
+    old_history.append(msg)
     old_file.write_text(json.dumps(old_history, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -267,3 +272,87 @@ def export_session_json(username: str, session_id: str) -> str:
     """将会话导出为 JSON 文本。"""
     history = load_session_history(username, session_id)
     return json.dumps(history, ensure_ascii=False, indent=2)
+
+
+# ── 管理员功能 ──
+
+def list_all_users_with_history() -> list[dict]:
+    """管理员视图：列出所有有聊天记录的用户。
+
+    Returns:
+        [{username, session_count, last_active, total_messages}]
+    """
+    users = []
+    if not CHAT_HISTORY_DIR.exists():
+        return users
+
+    for user_dir in sorted(CHAT_HISTORY_DIR.iterdir()):
+        if not user_dir.is_dir():
+            continue
+        username = user_dir.name
+
+        # 统计会话数
+        sessions = list_sessions(username)
+        session_count = len(sessions)
+
+        # 统计消息总数
+        total_messages = 0
+        for sess in sessions:
+            total_messages += sess.get("message_count", 0)
+
+        # 最后活跃时间
+        last_active = ""
+        if sessions:
+            last_active = sessions[0].get("updated_at", "")
+
+        # 统计旧格式的日期文件
+        date_files = list(user_dir.glob("*.json"))
+        old_count = len([f for f in date_files if not f.name.startswith("_")])
+
+        users.append({
+            "username": username,
+            "session_count": session_count,
+            "total_messages": total_messages,
+            "last_active": last_active[:10] if last_active else "未知",
+            "old_files": old_count,
+        })
+
+    # 按最后活跃时间降序
+    users.sort(key=lambda u: u.get("last_active", ""), reverse=True)
+    return users
+
+
+def load_user_history_for_admin(username: str) -> list[dict]:
+    """管理员视图：加载指定用户的所有历史消息（合并会话和旧格式）。
+
+    Returns:
+        按时间排序的消息列表
+    """
+    all_messages = []
+
+    # 加载新格式会话消息
+    sessions = list_sessions(username)
+    for sess in sessions:
+        msgs = load_session_history(username, sess["id"])
+        for msg in msgs:
+            msg["_session_id"] = sess["id"]
+            msg["_session_title"] = sess.get("title", "")
+        all_messages.extend(msgs)
+
+    # 加载旧格式日期文件
+    user_dir = _user_dir(username)
+    for f in sorted(user_dir.glob("*.json")):
+        if f.name.startswith("_"):
+            continue
+        try:
+            day_msgs = json.loads(f.read_text(encoding="utf-8"))
+            if isinstance(day_msgs, list):
+                for msg in day_msgs:
+                    msg["_date"] = f.stem
+                all_messages.extend(day_msgs)
+        except Exception:
+            pass
+
+    # 按时间排序
+    all_messages.sort(key=lambda m: m.get("timestamp", ""))
+    return all_messages

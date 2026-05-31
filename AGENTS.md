@@ -50,12 +50,14 @@ rag/                 → RAG 检索引擎
   health.py          → 健康检查
   logging_config.py  → 结构化日志
 ui/                  → Streamlit 界面组件
-  chat.py            → 对话面板
+  chat.py            → 对话面板（参考来源仅显示概要，不展开文件内容）
   login.py           → 登录页面
-  sidebar.py         → 侧边栏导航
+  sidebar.py         → 侧边栏导航（文件树 HTML details/summary 实现，无嵌套限制）
+  admin.py           → 管理员面板（用户管理、密码重置需二次确认）
   theme.py           → 双主题样式
 services/            → 业务服务层
   analytics.py       → 仪表盘统计
+  auth.py            → 账户认证（PBKDF2-SHA256 加盐哈希，JSON 持久化）
   history.py         → 聊天记录持久化
   knowledge_service.py → 文档预览服务
   rate_limiter.py    → 速率限制
@@ -84,19 +86,23 @@ tests/               → 单元测试
 - 版本号统一管理于 rag/__init__.py 的 __version__
 - Reranker 模型在 RAGChain 类级别缓存，避免重复加载
 - VectorStore 使用全局单例缓存，embedding 模型只加载一次
+- embedding/Reranker 模型检测本地路径后自动离线加载（local_files_only=True）
+- 侧边栏文件树使用 HTML `<details>/<summary>` 实现，避免 Streamlit expander 嵌套限制
+- 侧边栏文件元数据使用 session_state 指纹缓存，避免每次渲染读取全部文件
+- 参考来源仅显示文件名和路径，不展开查看文件内容（安全+性能）
 - 速率限制定期清理不活跃用户（10分钟/次），防止内存泄漏
 - LLM 调用带指数退避重试（最多 3 次），流式失败自动降级为非流式
-- Docker 镜像使用多阶段构建 + 非 root 用户运行
+- Docker 镜像使用多阶段构建 + non root 用户运行
 
 ## Model Path Resolution（模型路径解析）
 
 启动时 `run_app.py` 自动按以下顺序解析模型路径：
 
 1. 设置 `MODEL_ROOT=app_root/model`、`SENTENCE_TRANSFORMERS_HOME=app_root/model`
-2. 检测 `model/text2vec-base-chinese/` 是否存在 → 设置 `EMBEDDING_LOCAL_PATH`
-3. 检测 `model/bge-reranker-base/` 是否存在 → 设置 `RERANKER_LOCAL_PATH`
+2. 检测 `model/text2vec-base-chinese/` 或 HF 缓存 `model/models--shibing624--text2vec-base-chinese/` 是否存在 → 设置 `EMBEDDING_LOCAL_PATH`
+3. 检测 `model/bge-reranker-base/` 或 HF 缓存 `model/models--BAAI--bge-reranker-base/` 是否存在 → 设置 `RERANKER_LOCAL_PATH`
 4. `config.yaml` 通过 `${EMBEDDING_LOCAL_PATH:-}` / `${RERANKER_LOCAL_PATH:-}` 引用
-5. 存在则离线加载（`local_files_only=True`），不存在则从 HuggingFace 下载
+5. 存在则离线加载（`local_files_only=True`），不存在且未配置本地路径时从 HuggingFace 下载
 
 ## Windows 打包注意事项
 

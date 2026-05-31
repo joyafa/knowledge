@@ -1,12 +1,14 @@
 """向量化模块。
 
 封装 sentence-transformers 中文 embedding 模型为 ChromaDB 兼容的 embedding function。
+输出向量经过 L2 归一化，使得平方 L2 距离在 [0, 4] 区间，便于设定合理阈值。
 """
 
 import os
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 from chromadb.api.types import EmbeddingFunction, Documents
 
 from rag.logging_config import get_logger
@@ -49,6 +51,8 @@ class ChineseEmbeddingFunction(EmbeddingFunction):
     支持两种加载方式：
     - 在线：传入 HuggingFace 模型名（如 shibing624/text2vec-base-chinese）
     - 离线：传入本地模型目录路径
+
+    输出向量经 L2 归一化，位于单位球面上。
     """
 
     def __init__(self, model_name: str = "shibing624/text2vec-base-chinese", local_path: str = ""):
@@ -71,9 +75,13 @@ class ChineseEmbeddingFunction(EmbeddingFunction):
         return self._model
 
     def __call__(self, input: Documents) -> list[list[float]]:
-        """将文档列表转换为向量列表。"""
+        """将文档列表转换为 L2 归一化的向量列表。
+
+        归一化后向量位于单位球面上，平方 L2 距离 ∈ [0, 4]，
+        可使用合理的距离阈值（~1.5）过滤低相关度结果。
+        """
         model = self._get_model()
         logger.debug("正在向量化 %d 个文档块...", len(input))
-        embeddings = model.encode(input, show_progress_bar=True)
-        logger.debug("向量化完成，输出维度: %s", embeddings.shape)
+        embeddings = model.encode(input, show_progress_bar=True, normalize_embeddings=True)
+        logger.debug("向量化完成（已 L2 归一化），输出维度: %s", embeddings.shape)
         return embeddings.tolist()

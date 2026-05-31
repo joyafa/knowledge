@@ -39,9 +39,9 @@ vectorstore:
   persist_directory: "./data/chroma_db"
   collection_name: "knowledge_base"
   top_k: 5
-  # 距离阈值（平方L2距离，当前嵌入未归一化，需设较大值）
-  # TODO: 嵌入归一化后调整为 1.5
-  distance_threshold: 10000
+  # 距离阈值（平方L2距离，嵌入已L2归一化，范围 [0,4]）
+  # 1.5 对应余弦相似度 ≈ 0.25，低于此值认为不相关
+  distance_threshold: 1.5
 
 knowledge:
   docs_directory: "./data/knowledge"

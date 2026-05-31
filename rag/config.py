@@ -179,42 +179,4 @@ def load_config(config_path: str = "config.yaml") -> dict:
     推荐新代码直接使用 get_config() 返回的 Pydantic 对象。
     """
     config = get_config(config_path)
-    return {
-        "version": config.version,
-        "model_root": config.model_root,
-        "knowledge": {
-            "docs_directory": config.knowledge.docs_directory,
-            "chunk_size": config.knowledge.chunk_size,
-            "chunk_overlap": config.knowledge.chunk_overlap,
-        },
-        "embedding": {
-            "model": config.embedding.model,
-            "local_path": config.embedding.local_path,
-        },
-        "reranker": {
-            "model": config.reranker.model,
-            "local_path": config.reranker.local_path,
-            "enabled": config.reranker.enabled,
-            "top_n": config.reranker.top_n,
-        },
-        "vectorstore": {
-            "persist_directory": config.vectorstore.persist_directory,
-            "collection_name": config.vectorstore.collection_name,
-            "top_k": config.vectorstore.top_k,
-            "distance_threshold": config.vectorstore.distance_threshold,
-        },
-        "llm": {
-            "api_base": config.llm.api_base,
-            "api_key": config.llm.api_key,
-            "model": config.llm.model,
-            "temperature": config.llm.temperature,
-            "max_tokens": config.llm.max_tokens,
-            "context_window": config.llm.context_window,
-        },
-        "auth": {
-            "enabled": config.auth.enabled,
-            "users_file": config.auth.users_file,
-            "min_password_length": config.auth.min_password_length,
-            "admin_users": config.auth.admin_users,
-        },
-    }
+    return config.model_dump()

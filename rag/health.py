@@ -6,6 +6,8 @@
 import time
 from typing import Any
 
+import httpx
+
 from rag import __version__
 from rag.logging_config import get_logger
 
@@ -13,12 +15,13 @@ logger = get_logger(__name__)
 
 
 def check_llm_connectivity(config) -> dict[str, Any]:
-    """检查 LLM API 连通性。"""
+    """检查 LLM API 连通性（带超时保护，避免长时间阻塞）。"""
     try:
         from openai import OpenAI
         client = OpenAI(
             base_url=config.llm.api_base,
             api_key=config.llm.api_key,
+            http_client=httpx.Client(timeout=httpx.Timeout(10.0, connect=5.0)),
         )
         start = time.time()
         # 仅查询模型列表验证连通性

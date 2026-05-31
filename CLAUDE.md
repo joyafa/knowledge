@@ -48,11 +48,23 @@ run_app.py           → 统一启动入口（处理环境变量、目录创建�
 app.py               → Streamlit 主应用（双栏布局 + 赛博朋克主题 + 用户登录）
 rag/
   config.py          → Pydantic 配置管理（支持 ${ENV_VAR:-default} 环境变量替换）
-  loader.py          → 文档加载与分块（支持 .md / .txt / .pdf，按标题层级切分）
-  embeddings.py      → 向量化（sentence-transformers → ChromaDB embedding function）
+  loader.py          → 文档加载与分块（支持 .md / .txt / .pdf / .cpp / .h 等，编码自动探测）
+  embeddings.py      → 向量化（sentence-transformers → ChromaDB embedding function，支持离线本地加载）
   vectorstore.py     → ChromaDB 向量库管理（全局单例缓存，增删查）
   chain.py           → RAG 检索链（混合检索 + RRF 融合 + Reranker + LLM 生成）
   preload.py         → 后台预加载（daemon thread，避免 Streamlit rerun 阻塞）
+ui/
+  chat.py            → 对话面板（参考来源仅显示文件路径概要）
+  login.py           → 登录页面
+  sidebar.py         → 侧边栏（文件树 HTML details/summary 实现，指纹缓存优化）
+  admin.py           → 管理员面板（用户管理、密码重置二次确认）
+  theme.py           → 双主题样式（亮/暗 CSS 变量）
+services/
+  analytics.py       → 仪表盘统计
+  auth.py            → 账户认证（PBKDF2-SHA256 加盐哈希，JSON 持久化）
+  history.py         → 聊天记录持久化
+  knowledge_service.py → 文档预览服务
+  rate_limiter.py    → 速率限制（定期清理不活跃用户）
 scripts/
   build_installer.py → 统一构建入口（--platform windows|linux|both，--skip-models 快速调试）
   build_windows.py   → Windows PyInstaller + NSIS 打包
@@ -63,7 +75,7 @@ scripts/
 config.yaml          → 全局配置（模型、向量库、分块参数、检索阈值）
 knowledge/           → 知识库文档目录（.md / .txt / .pdf）
 data/                → 运行时数据（chroma_db、knowledge、logs、chat_history）
-model/               → AI 模型缓存（SENTENCE_TRANSFORMERS_HOME 指向此处）
+model/               → AI 模型缓存（SENTENCE_TRANSFORMERS_HOME / HF_HOME 指向此处）
 ```
 
 ## 核心设计
@@ -82,6 +94,7 @@ model/               → AI 模型缓存（SENTENCE_TRANSFORMERS_HOME 指向此�
 - **VectorStore 全局单例缓存**：相同配置只创建一个实例，embedding 模型只加载一次
 - **检索时复用 embedding 模型**：直接用 `query_embeddings` 查询，跳过 ChromaDB 二次实例化
 - **检索耗时**：~25ms（优化前 7.4s）
+- **侧边栏文件树**：HTML `<details>/<summary>` 实现，指纹缓存避免每次读取全部文件
 
 ### 多用户隔离
 
@@ -100,8 +113,17 @@ model/               → AI 模型缓存（SENTENCE_TRANSFORMERS_HOME 指向此�
 - `scripts/build_installer.py` 统一构建入口，支持 `--skip-models` 快速调试开关
 - Windows：PyInstaller 编译 exe + NSIS 打包安装包，源码编译进 PYZ 不暴露
 - Linux：源码 + Python standalone + fpm 打包 .deb/.rpm，`prepare_linux_staging.py` 可在 Windows 上准备
-- 模型缓存统一到 `model/` 目录，`run_app.py` 启动时自动检测本地模型并设置 `EMBEDDING_LOCAL_PATH`
+- 模型缓存统一到 `model/` 目录（支持 HuggingFace 缓存格式和直接模型目录两种布局）
+- `run_app.py` 启动时自动检测本地模型（含 HF 缓存），设置 `EMBEDDING_LOCAL_PATH` / `RERANKER_LOCAL_PATH`
 - `config.yaml` 的 `local_path` 使用 `${EMBEDDING_LOCAL_PATH:-}` 环境变量引用，不硬编码
+- embedding/Reranker 检测到本地路径后使用 `local_files_only=True` 完全离线加载
+
+### UI 实现细节
+
+- 侧边栏文件树使用 HTML `<details>/<summary>` 标签实现，支持无限层级嵌套（绕过 Streamlit expander 限制）
+- 文件元数据使用 `session_state` 指纹缓存（文件数+最新修改时间），避免每次渲染扫描全部文件
+- 参考来源仅显示文件名和路径概要，不展开文件内容（提升加载速度 + 代码保护）
+- 管理面板密码重置需二次确认，防止误输入
 
 ## 配置切换
 

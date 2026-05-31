@@ -560,10 +560,10 @@ class RAGChain:
             search_results = self._rerank(question, search_results)
 
         budget = self._calc_context_budget(question, history)
-        # 低置信度检测（仅在嵌入归一化后生效，距离范围 [0,4]）
-        # TODO: 执行 clear_db + ingest 重建归一化向量库后，改为 top_distance > 0.5
+        # 低置信度检测（嵌入已 L2 归一化，平方L2距离范围 [0,4]）
+        # top_distance > 2.0 表示余弦相似度≈0，匹配度接近随机
         top_distance = search_results[0].get("distance", 999) if search_results else 999
-        low_confidence = top_distance > 5000  # 未归一化嵌入用高阈值，暂不触发
+        low_confidence = top_distance > 2.0  # 归一化后平方L2∈[0,4]，2.0≈余弦相似度0
         context = self._build_context(search_results, budget, low_confidence=low_confidence)
         sources = self._build_sources(search_results)
         messages = self._build_messages(context, question, history)

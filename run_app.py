@@ -210,13 +210,52 @@ def main():
     _patch_dll_search_path(app_root)
 
     # 检测本地模型（优先使用本地模型，避免首次启动联网下载）
-    # 打包脚本会将模型复制到 model/text2vec-base-chinese/ 和 model/bge-reranker-base/
+    # 支持两种布局：
+    #   1) 扁平目录：model/text2vec-base-chinese/、model/bge-reranker-base/
+    #   2) HuggingFace 缓存：model/models--*--*/snapshots/<hash>/
     model_dir = app_root / "model"
-    emb_local = model_dir / "text2vec-base-chinese"
-    reranker_local = model_dir / "bge-reranker-base"
 
-    has_local_emb = emb_local.exists()
-    has_local_reranker = reranker_local.exists()
+    def _find_model_snapshot(cache_name: str, flat_name: str) -> str:
+        """在 model/ 目录中查找可用模型，返回有效路径或空字符串。
+
+        优先级：扁平目录 > HF 缓存最新 snapshot。
+        校验：目标目录必须包含 config.json 和模型权重文件。
+        """
+        # 1) 扁平目录
+        flat = model_dir / flat_name
+        if flat.is_dir():
+            cfg = flat / "config.json"
+            if cfg.exists():
+                return str(flat)
+
+        # 2) HF 缓存结构
+        hf_cache = model_dir / cache_name
+        snapshots_dir = hf_cache / "snapshots"
+        if snapshots_dir.is_dir():
+            snapshot_dirs = sorted(
+                [d for d in snapshots_dir.iterdir() if d.is_dir()],
+                key=lambda d: d.stat().st_mtime, reverse=True,
+            )
+            for snap in snapshot_dirs:
+                cfg = snap / "config.json"
+                has_weights = any(
+                    (snap / f).exists()
+                    for f in ("pytorch_model.bin", "model.safetensors", "tf_model.h5")
+                )
+                if cfg.exists() and has_weights:
+                    return str(snap)
+
+        return ""
+
+    emb_local = _find_model_snapshot(
+        "models--shibing624--text2vec-base-chinese", "text2vec-base-chinese"
+    )
+    reranker_local = _find_model_snapshot(
+        "models--BAAI--bge-reranker-base", "bge-reranker-base"
+    )
+
+    has_local_emb = bool(emb_local)
+    has_local_reranker = bool(reranker_local)
 
     if has_local_emb:
         os.environ["EMBEDDING_LOCAL_PATH"] = str(emb_local)

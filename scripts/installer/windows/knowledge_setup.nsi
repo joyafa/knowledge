@@ -23,6 +23,9 @@ OutFile "${OUTDIR}\knowledge-setup-${VERSION}-windows.exe"
 InstallDir "$PROGRAMFILES64\${APPNAME}"
 RequestExecutionLevel admin
 
+; 非固实压缩：避免 3.6GB staging 超出 NSIS 固实块 2GB 上限
+SetCompressor lzma
+
 ; ── 安装向导页面 ──
 
 Page directory

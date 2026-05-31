@@ -43,6 +43,71 @@ def _resolve_dict(obj):
     return obj
 
 
+# ── 本地模型检测 ──
+
+def detect_local_models(model_root: str = None) -> None:
+    """检测本地模型并设置 EMBEDDING_LOCAL_PATH / RERANKER_LOCAL_PATH 环境变量。
+
+    支持两种布局：
+      1) 扁平目录：model/text2vec-base-chinese/、model/bge-reranker-base/
+      2) HuggingFace 缓存：model/models--*--*/snapshots/<hash>/
+
+    应在 app 启动早期调用，确保 config.yaml 中的 ${VAR:-} 占位符能正确解析。
+    幂等调用：已有环境变量时不覆盖。
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+
+    if model_root is None:
+        model_root = os.environ.get("MODEL_ROOT", "model")
+    root = Path(model_root).resolve()
+
+    def _find_snapshot(cache_name: str, flat_name: str) -> str:
+        # 1) 扁平目录
+        flat = root / flat_name
+        if flat.is_dir():
+            cfg = flat / "config.json"
+            if cfg.exists():
+                return str(flat)
+
+        # 2) HF 缓存结构
+        hf_cache = root / cache_name
+        snapshots_dir = hf_cache / "snapshots"
+        if snapshots_dir.is_dir():
+            snapshot_dirs = sorted(
+                [d for d in snapshots_dir.iterdir() if d.is_dir()],
+                key=lambda d: d.stat().st_mtime, reverse=True,
+            )
+            for snap in snapshot_dirs:
+                cfg = snap / "config.json"
+                has_weights = any(
+                    (snap / f).exists()
+                    for f in ("pytorch_model.bin", "model.safetensors", "tf_model.h5")
+                )
+                if cfg.exists() and has_weights:
+                    return str(snap)
+
+        return ""
+
+    # Embedding 模型
+    if not os.environ.get("EMBEDDING_LOCAL_PATH"):
+        emb_path = _find_snapshot(
+            "models--shibing624--text2vec-base-chinese", "text2vec-base-chinese"
+        )
+        if emb_path:
+            os.environ["EMBEDDING_LOCAL_PATH"] = emb_path
+            _logger.debug("检测到本地 Embedding 模型: %s", emb_path)
+
+    # Reranker 模型
+    if not os.environ.get("RERANKER_LOCAL_PATH"):
+        reranker_path = _find_snapshot(
+            "models--BAAI--bge-reranker-base", "bge-reranker-base"
+        )
+        if reranker_path:
+            os.environ["RERANKER_LOCAL_PATH"] = reranker_path
+            _logger.debug("检测到本地 Reranker 模型: %s", reranker_path)
+
+
 # ── Pydantic 模型 ──
 
 class LLMConfig(BaseModel):

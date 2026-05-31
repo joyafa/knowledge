@@ -11,6 +11,9 @@ from pathlib import Path
 # ChromaDB: 禁用遥测，避免 posthog 版本不兼容导致 capture() 参数错误
 os.environ.setdefault("CHROMA_TELEMETRY", "False")
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+# 自动检测本地模型（HF 缓存 / 扁平目录），设置 EMBEDDING_LOCAL_PATH / RERANKER_LOCAL_PATH
+from rag.config import detect_local_models
+detect_local_models()
 # 仅在未配置本地模型路径时才设置 HF 镜像（本地模型就绪时无需联网）
 if not (os.environ.get("EMBEDDING_LOCAL_PATH") and os.environ.get("RERANKER_LOCAL_PATH")):
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")

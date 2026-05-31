@@ -115,8 +115,8 @@ class UserManager:
             return False, "用户名至少需要 2 个字符"
         if len(username) > 32:
             return False, "用户名不能超过 32 个字符"
-        if not password or len(password) < 4:
-            return False, "密码至少需要 4 个字符"
+        if not password or len(password) < 8:
+            return False, "密码至少需要 8 个字符"
 
         with self._lock:
             users = self._data.setdefault("users", {})
@@ -139,8 +139,8 @@ class UserManager:
 
     def change_password(self, username: str, old_password: str, new_password: str) -> tuple[bool, str]:
         """修改密码。"""
-        if not new_password or len(new_password) < 4:
-            return False, "新密码至少需要 4 个字符"
+        if not new_password or len(new_password) < 8:
+            return False, "新密码至少需要 8 个字符"
 
         with self._lock:
             user = self._data.get("users", {}).get(username)
@@ -163,8 +163,8 @@ class UserManager:
         Returns:
             (success, message)
         """
-        if not new_password or len(new_password) < 4:
-            return False, "新密码至少需要 4 个字符"
+        if not new_password or len(new_password) < 8:
+            return False, "新密码至少需要 8 个字符"
 
         with self._lock:
             user = self._data.get("users", {}).get(username)

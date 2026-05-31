@@ -48,7 +48,8 @@ def list_sessions(username: str) -> list[dict]:
             sessions = data.get("sessions", [])
         sessions.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
         return sessions
-    except Exception:
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("会话文件损坏 %s: %s", sf, e)
         return []
 
 
@@ -61,8 +62,8 @@ def get_active_session_id(username: str) -> Optional[str]:
             active = data.get("active_session")
             if active:
                 return active
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("读取活跃会话失败 %s: %s", sf, e)
     # 默认创建或获取第一个会话
     sessions = list_sessions(username)
     if sessions:
@@ -100,8 +101,8 @@ def update_session_title(username: str, session_id: str, title: str):
                 data["sessions"] = old
             else:
                 data = old
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("读取会话数据失败 %s: %s", sf, e)
 
     for sess in data.get("sessions", []):
         if sess["id"] == session_id:
@@ -133,8 +134,8 @@ def switch_session(session_id: str, username: str = ""):
             else:
                 data = old
             data["active_session"] = session_id
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("切换会话失败 %s: %s", sf, e)
     sf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -147,8 +148,8 @@ def _save_sessions(username: str, sessions: list[dict]):
         try:
             old = json.loads(sf.read_text(encoding="utf-8"))
             data["active_session"] = old.get("active_session")
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("读取旧会话失败 %s: %s", sf, e)
     sf.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -174,7 +175,8 @@ def load_history(username: str) -> list[dict]:
     if history_file.exists():
         try:
             return json.loads(history_file.read_text(encoding="utf-8"))
-        except Exception:
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("加载历史记录失败 %s: %s", history_file, e)
             return []
     return []
 
@@ -185,7 +187,8 @@ def load_session_history(username: str, session_id: str) -> list[dict]:
     if sf.exists():
         try:
             return json.loads(sf.read_text(encoding="utf-8"))
-        except Exception:
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("加载会话历史失败 %s: %s", sf, e)
             return []
     return []
 
@@ -219,7 +222,7 @@ def save_message(
     if old_file.exists():
         try:
             old_history = json.loads(old_file.read_text(encoding="utf-8"))
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             old_history = []
     old_history.append(msg)
     old_file.write_text(json.dumps(old_history, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -242,7 +245,7 @@ def load_history_by_date(username: str, date_str: str) -> list[dict]:
     if history_file.exists():
         try:
             return json.loads(history_file.read_text(encoding="utf-8"))
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             return []
     return []
 
@@ -350,8 +353,8 @@ def load_user_history_for_admin(username: str) -> list[dict]:
                 for msg in day_msgs:
                     msg["_date"] = f.stem
                 all_messages.extend(day_msgs)
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("加载日期历史失败 %s: %s", f, e)
 
     # 按时间排序
     all_messages.sort(key=lambda m: m.get("timestamp", ""))

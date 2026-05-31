@@ -126,7 +126,7 @@ def build_windows(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir
     # 读取版本号
     import yaml
     config_file = staging / "config.yaml"
-    version = "0.8.17"
+    version = "0.18.18"
     if config_file.exists():
         with open(config_file, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)

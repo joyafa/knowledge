@@ -35,7 +35,12 @@ def read_full_content(docs_dir: str, relative_path: str) -> Optional[str]:
     Returns:
         文档全文内容，失败返回 None
     """
-    file_path = Path(docs_dir) / relative_path
+    # 安全校验：防止路径遍历攻击（../../etc/passwd）
+    base_dir = Path(docs_dir).resolve()
+    file_path = (base_dir / relative_path).resolve()
+    if not str(file_path).startswith(str(base_dir)):
+        logger.warning("拒绝路径遍历请求: %s", relative_path)
+        return None
     if not file_path.exists():
         return None
 

@@ -5,7 +5,6 @@
 
 import os
 import re
-from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
@@ -177,14 +176,14 @@ class AuthConfig(BaseModel):
     """用户认证配置。"""
     enabled: bool = True
     users_file: str = "./data/users.json"
-    min_password_length: int = Field(default=4, ge=2, le=64)
+    min_password_length: int = Field(default=8, ge=4, le=64)
     admin_users: list[str] = []
 
 
 class AppConfig(BaseModel):
     """应用全局配置。"""
     # 应用版本号
-    version: str = "0.8.17"
+    version: str = "0.18.18"
     # 本地模型根目录（离线部署时设置环境变量 MODEL_ROOT）
     model_root: str = "model"
     llm: LLMConfig = Field(default_factory=LLMConfig)

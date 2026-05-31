@@ -10,7 +10,7 @@ model_root: "${MODEL_ROOT:-model}"
 
 llm:
   api_base: "https://open.bigmodel.cn/api/paas/v4"
-  api_key: 041a5f73c57a4a47bffb590ea7f2bf7e.wem5FwITEyL1N33V
+  api_key: "041a5f73c57a4a47bffb590ea7f2bf7e.wem5FwITEyL1N33V"
   model: "glm-4-flash"
   temperature: 0.3
   max_tokens: 1024
@@ -58,9 +58,23 @@ rate_limit:
 auth:
   enabled: true
   users_file: "./data/users.json"
-  min_password_length: 4
-  # 管理员用户名列表（兼容旧配置，auth.enabled=true 时由 users.json 中的 role 决定）
+  min_password_length: 8
+  # 首个注册用户自动成为管理员（仅在 users.json 为空时生效）
+  # 如需指定初始管理员，可在此设置：admin_users: ["admin"]
   admin_users: []
+
+# 构建打包时需要包含的文件/目录（Windows/Linux 通用）
+build_includes:
+- app.py
+- config.yaml
+- requirements.txt
+- run_app.py
+- logo.png
+- rag
+- ui
+- services
+- scripts
+- knowledge
 
 # 多轮对话
 max_conversation_turns: 10

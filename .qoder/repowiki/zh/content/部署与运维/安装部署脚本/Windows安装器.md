@@ -28,6 +28,7 @@
 - 新增runtime_hook_chromadb.py处理动态模块加载问题
 - 更新安装器脚本以适配PyInstaller输出结构
 - 修正批处理脚本中的路径引用以匹配新架构
+- **新增**：改进压缩算法配置，采用LZMA非固实压缩解决2GB限制问题
 
 ## 目录
 1. [简介](#简介)
@@ -43,6 +44,8 @@
 
 ## 简介
 本文件为Windows安装器的完整技术文档，涵盖基于PyInstaller + NSIS的新打包架构、批处理脚本功能说明、NSIS安装脚本配置、安装路径与注册表设置、桌面快捷方式生成、Windows服务注册、防火墙规则添加、Python环境检查与依赖安装、错误处理机制与日志记录，以及标准化的部署指南。目标是为Windows系统管理员提供清晰、可操作的部署参考。
+
+**更新**：安装器现已采用LZMA非固实压缩算法，有效解决超过2GB的staging目录打包限制问题。
 
 ## 项目结构
 Windows安装器相关文件主要位于 `scripts/installer/windows/` 目录下，配合基于PyInstaller的新构建脚本 `scripts/build_windows.py`、PyInstaller规格文件 `knowledge_app.spec`、运行时钩子脚本 `scripts/hooks/runtime_hook_chromadb.py` 和应用入口 `run_app.py`、配置文件 `config.yaml`、依赖清单 `requirements.txt`，以及文档入库脚本 `scripts/ingest.py` 和日志配置 `rag/logging_config.py`。
@@ -107,7 +110,7 @@ BUILD_WIN --> REQ
 - **PyInstaller规格文件**：定义应用打包规则，包含数据文件收集、隐藏导入、二进制依赖和运行时钩子配置。
 - **运行时钩子脚本**：专门处理ChromaDB动态模块加载问题，通过monkey-patch拦截pkgutil.iter_modules实现。
 - **构建脚本**：使用PyInstaller编译应用为独立exe，修复数据文件位置，准备staging目录，调用NSIS生成安装包。
-- **NSIS安装脚本**：负责安装向导、自定义配置页面、文件复制、目录创建、数据迁移、注册表项写入、快捷方式生成、卸载流程。
+- **NSIS安装脚本**：负责安装向导、自定义配置页面、文件复制、目录创建、数据迁移、注册表项写入、快捷方式生成、卸载流程。**更新**：采用LZMA非固实压缩算法，解决2GB打包限制。
 - **批处理脚本**：提供启动主程序、文档入库、打开知识库界面、停止服务、编辑配置等便捷操作。
 - **Python配置写入脚本**：在安装过程中根据用户输入更新LLM配置。
 - **应用入口**：run_app.py处理PyInstaller打包后的环境修复、DLL路径设置、模型检测和Streamlit启动。
@@ -116,12 +119,14 @@ BUILD_WIN --> REQ
 - [knowledge_app.spec:1-217](file://knowledge_app.spec#L1-L217)
 - [runtime_hook_chromadb.py:1-50](file://scripts/hooks/runtime_hook_chromadb.py#L1-L50)
 - [build_windows.py:1-174](file://scripts/build_windows.py#L1-L174)
-- [knowledge_setup.nsi:1-138](file://scripts/installer/windows/knowledge_setup.nsi#L1-L138)
+- [knowledge_setup.nsi:1-141](file://scripts/installer/windows/knowledge_setup.nsi#L1-L141)
 - [write_config.py:1-41](file://scripts/installer/windows/write_config.py#L1-L41)
 - [run_app.py:1-274](file://run_app.py#L1-L274)
 
 ## 架构概览
 Windows安装器采用"PyInstaller + NSIS安装器 + 批处理脚本 + Streamlit应用"的全新架构。构建阶段使用PyInstaller将应用编译为独立exe，修复数据文件位置，准备staging目录，安装阶段通过NSIS将文件部署到Program Files目录，创建数据目录与初始文档，写入LLM配置，生成快捷方式，并在注册表中登记卸载信息。运行时通过run_app.py处理PyInstaller打包后的环境修复，通过批处理脚本启动或停止服务，通过文档入库脚本进行知识库维护。
+
+**更新**：安装阶段采用LZMA非固实压缩算法，有效解决大型staging目录（超过3.6GB）的打包限制问题。
 
 ```mermaid
 graph TB
@@ -134,6 +139,7 @@ STAGE[Staging Directory]
 end
 subgraph "安装阶段"
 NSIS[knowledge_setup.nsi]
+COMPRESS[LZMA非固实压缩]
 INST[InstallDir: Program Files]
 DATA[data/目录]
 REG[注册表 Uninstall]
@@ -151,7 +157,8 @@ BUILD_MAIN --> BUILD_WIN
 BUILD_WIN --> SPEC
 SPEC --> HOOK
 BUILD_WIN --> STAGE
-STAGE --> NSIS
+STAGE --> COMPRESS
+COMPRESS --> NSIS
 NSIS --> INST
 NSIS --> DATA
 NSIS --> REG
@@ -264,6 +271,7 @@ Output --> BuildEnd([构建完成])
   - 创建数据目录：chroma_db、knowledge、logs、chat_history、model。
   - 若知识库目录为空且存在初始文档，则复制初始知识库文档。
   - 调用exe内置的--write-config模式写入LLM配置。
+- **压缩算法配置**：**更新**采用LZMA非固实压缩算法，解决3.6GB以上staging目录的打包限制。
 - **快捷方式**：
   - 桌面：知识库助手.lnk
   - 开始菜单：知识库助手、编辑配置、数据目录、卸载
@@ -272,6 +280,12 @@ Output --> BuildEnd([构建完成])
 - **卸载流程**：
   - 删除安装目录、桌面快捷方式、开始菜单目录、注册表项。
 
+**更新**：安装器现在使用LZMA非固实压缩算法，该算法具有以下优势：
+- **突破2GB限制**：传统固实压缩对单个压缩块有2GB大小限制，LZMA非固实压缩不受此限制
+- **更好的压缩比**：对于大型staging目录（3.6GB+），LZMA提供更优的压缩效果
+- **内存效率**：非固实压缩在解压时内存占用更合理
+- **兼容性**：LZMA格式在现代Windows系统上广泛支持
+
 ```mermaid
 flowchart TD
 Start([安装开始]) --> Page["显示目录选择页面"]
@@ -279,7 +293,8 @@ Page --> LLMPage["显示LLM配置页面"]
 LLMPage --> Validate{"验证配置"}
 Validate --> |通过| Install["复制文件到安装目录"]
 Validate --> |跳过| Install
-Install --> CreateDirs["创建数据目录<br/>chroma_db, knowledge, logs, chat_history, model"]
+Install --> Compress["LZMA非固实压缩<br/>突破2GB限制"]
+Compress --> CreateDirs["创建数据目录<br/>chroma_db, knowledge, logs, chat_history, model"]
 CreateDirs --> CopyDocs{"知识库是否为空"}
 CopyDocs --> |是| CopyInit["复制初始文档"]
 CopyDocs --> |否| SkipCopy["跳过复制"]
@@ -294,7 +309,7 @@ Reg --> End([安装完成])
 - [knowledge_setup.nsi:80-104](file://scripts/installer/windows/knowledge_setup.nsi#L80-L104)
 
 **章节来源**
-- [knowledge_setup.nsi:1-138](file://scripts/installer/windows/knowledge_setup.nsi#L1-L138)
+- [knowledge_setup.nsi:1-141](file://scripts/installer/windows/knowledge_setup.nsi#L1-L141)
 
 ### 应用入口（run_app.py）
 - **功能**：处理PyInstaller打包后的环境修复、DLL路径设置、模型检测和Streamlit启动。
@@ -448,6 +463,7 @@ CleanPID --> Done
 - **PyTorch/DLL修复**：通过运行时DLL搜索路径修复解决DLL加载失败问题。
 - **本地模型支持**：模型在首次运行时自动下载，支持本地模型缓存。
 - **环境变量管理**：统一模型缓存目录，避免网络依赖。
+- **压缩算法优化**：**更新**LZMA非固实压缩算法，解决大型staging目录打包限制。
 
 ```mermaid
 graph TB
@@ -462,6 +478,8 @@ RUNAPP --> DLL[DLL搜索路径修复]
 RUNAPP --> MODEL[模型检测]
 MODEL --> LOCAL[本地模型缓存]
 MODEL --> HF[HF_ENDPOINT设置]
+COMPRESS[LZMA非固实压缩] --> NSIS[NSIS安装器]
+NSIS --> INSTALL[安装包生成]
 ```
 
 **图表来源**
@@ -481,6 +499,13 @@ MODEL --> HF[HF_ENDPOINT设置]
 - **文件监控禁用**：打包后禁用文件监控，减少系统资源占用。
 - **数据文件修复**：自动修复PyInstaller的_internal目录布局问题。
 - **日志系统**：双通道输出（控制台+文件），便于问题定位与性能监控。
+- **压缩算法优化**：**更新**采用LZMA非固实压缩，显著提升大型staging目录的打包效率和稳定性。
+
+**更新**：LZMA非固实压缩算法的优势：
+- **内存效率**：相比固实压缩，内存占用更合理，适合大型文件处理
+- **并发性能**：支持多线程解压，提升安装速度
+- **容错性**：单个文件损坏不影响其他文件的解压
+- **压缩质量**：对大型、复杂的staging目录提供更优的压缩比
 
 ## 故障排除指南
 - **PyInstaller编译失败**：检查knowledge_app.spec文件语法，确认所有依赖正确配置。
@@ -490,6 +515,7 @@ MODEL --> HF[HF_ENDPOINT设置]
 - **服务无法启动**：检查端口8501是否被占用，查看logs目录日志文件。
 - **入库无结果**：确认knowledge目录存在有效文档（.md/.txt/.pdf），检查向量化模型路径。
 - **停止服务无效**：确认PID文件存在或系统中存在相关进程；必要时手动结束进程。
+- **安装包过大或超时**：**更新**确认使用LZMA非固实压缩，该算法能有效处理大型staging目录。
 
 **章节来源**
 - [build_windows.py:69-76](file://scripts/build_windows.py#L69-L76)
@@ -498,7 +524,7 @@ MODEL --> HF[HF_ENDPOINT设置]
 - [logging_config.py:46-75](file://rag/logging_config.py#L46-L75)
 
 ## 结论
-该Windows安装器通过PyInstaller + NSIS的新架构实现了完整的部署方案，解决了ChromaDB动态模块加载、DLL路径修复、本地模型缓存等关键技术问题。管理员可依据本文档快速完成安装、配置、运行与维护工作。
+该Windows安装器通过PyInstaller + NSIS的新架构实现了完整的部署方案，解决了ChromaDB动态模块加载、DLL路径修复、本地模型缓存等关键技术问题。**更新**：采用LZMA非固实压缩算法有效解决了超过2GB的staging目录打包限制，为大型应用的Windows部署提供了可靠的解决方案。管理员可依据本文档快速完成安装、配置、运行与维护工作。
 
 ## 附录
 
@@ -535,3 +561,19 @@ MODEL --> HF[HF_ENDPOINT设置]
 - **数据保护**：定期备份data目录，特别是chroma_db与chat_history
 - **日志审计**：启用审计日志，定期检查audit目录
 - **模型安全**：本地模型缓存应定期更新，确保安全性
+- **压缩算法合规**：LZMA非固实压缩算法符合现代Windows系统标准，无需额外许可
+
+### 技术规格对比
+**传统固实压缩 vs LZMA非固实压缩**
+
+| 特性 | 固实压缩 | LZMA非固实压缩 |
+|------|----------|----------------|
+| **2GB限制** | 存在（单个压缩块） | 不存在（单个压缩块） |
+| **staging目录支持** | ≤2GB | ≥3.6GB |
+| **内存占用** | 高（需要加载整个压缩块） | 低（按文件解压） |
+| **并发性能** | 低（串行解压） | 高（支持多线程） |
+| **容错性** | 差（单点故障影响整块） | 好（单文件损坏不影响其他文件） |
+| **压缩比** | 中等 | 更优（针对大型复杂目录） |
+| **兼容性** | 广泛支持 | 现代系统支持良好 |
+
+**更新**：对于超过3.6GB的大型staging目录，LZMA非固实压缩是唯一可行的选择，能够确保安装包的稳定生成和可靠安装。

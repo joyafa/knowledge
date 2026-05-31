@@ -25,7 +25,7 @@ def main():
     if STAGING.exists():
         shutil.rmtree(STAGING)
 
-    version = "0.8.17"
+    version = "0.18.18"
     config_file = ROOT_DIR / "config.yaml"
     if config_file.exists():
         import yaml
@@ -37,10 +37,13 @@ def main():
     print("[1/3] 复制项目代码...")
     app_dir = STAGING / "opt" / "knowledge-assistant" / "app"
 
-    includes = [
-        "app.py", "config.yaml", "requirements.txt", "logo.png",
-        "rag", "ui", "services", "scripts",
-    ]
+    import yaml as _yaml
+    with open(ROOT_DIR / "config.yaml", "r", encoding="utf-8") as _f:
+        _cfg = _yaml.safe_load(_f)
+    includes = _cfg.get("build_includes", [
+        "app.py", "config.yaml", "requirements.txt", "run_app.py", "logo.png",
+        "rag", "ui", "services", "scripts", "knowledge",
+    ])
 
     excludes = {"__pycache__", ".git", ".claude", ".pytest_cache", "installer"}
 
@@ -122,12 +125,6 @@ def main():
     config_dest = STAGING / "etc" / "knowledge-assistant"
     config_dest.mkdir(parents=True, exist_ok=True)
     shutil.copy2(config_path, config_dest / "config.yaml")
-
-    # 移动 postinst/prerm 到 staging 根目录
-    for script_name in ["postinst.sh", "prerm.sh"]:
-        src = STAGING / script_name
-        if src.exists():
-            pass  # 已在 staging 根目录
 
     # 统计大小
     total_size = sum(f.stat().st_size for f in STAGING.rglob("*") if f.is_file())

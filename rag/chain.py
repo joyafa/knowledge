@@ -70,19 +70,34 @@ class BM25Retriever:
         self._doc_freq: dict[str, int] = {}
         self._avg_doc_len: float = 0
         self._built = False
+        # 预计算缓存：每个文档的 token 列表和词频
+        self._doc_tokens: list[list[str]] = []
+        self._doc_term_freqs: list[dict[str, int]] = []
 
     def index(self, documents: list[dict]):
         """构建 BM25 索引。
+
+        预计算每个文档的 token 列表和词频，避免搜索时重复分词。
 
         Args:
             documents: [{"content": str, "metadata": dict}, ...]
         """
         self._corpus = documents
         self._doc_freq = {}
+        self._doc_tokens = []
+        self._doc_term_freqs = []
         total_len = 0
 
         for doc in documents:
             terms = self._tokenize(doc["content"])
+            self._doc_tokens.append(terms)
+
+            # 预计算词频
+            term_freqs: dict[str, int] = {}
+            for t in terms:
+                term_freqs[t] = term_freqs.get(t, 0) + 1
+            self._doc_term_freqs.append(term_freqs)
+
             unique_terms = set(terms)
             for term in unique_terms:
                 self._doc_freq[term] = self._doc_freq.get(term, 0) + 1
@@ -107,7 +122,10 @@ class BM25Retriever:
         return tokens
 
     def search(self, query: str, top_k: int = 10) -> list[tuple[int, float]]:
-        """关键词检索，返回 [(doc_index, score), ...] 按分数降序排列。"""
+        """关键词检索，返回 [(doc_index, score), ...] 按分数降序排列。
+
+        复用 index() 阶段预计算的 token 列表和词频，避免重复分词。
+        """
         if not self._built:
             return []
 
@@ -118,15 +136,12 @@ class BM25Retriever:
         N = len(self._corpus)
         scores = []
 
-        for idx, doc in enumerate(self._corpus):
-            doc_terms = self._tokenize(doc["content"])
-            doc_len = len(doc_terms)
+        for idx in range(len(self._corpus)):
+            doc_len = len(self._doc_tokens[idx])
             if doc_len == 0:
                 continue
 
-            term_freqs = {}
-            for t in doc_terms:
-                term_freqs[t] = term_freqs.get(t, 0) + 1
+            term_freqs = self._doc_term_freqs[idx]
 
             score = 0.0
             for term in query_terms:

@@ -104,10 +104,13 @@ def build_linux(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir: 
     model_dir = staging / "opt" / "knowledge-assistant" / "model"
 
     # 项目代码（Linux 无 PyInstaller 编译，需保留源码，但排除 dev 工具）
-    includes = [
+    import yaml as _yaml
+    with open(root_dir / "config.yaml", "r", encoding="utf-8") as _f:
+        _cfg = _yaml.safe_load(_f)
+    includes = _cfg.get("build_includes", [
         "app.py", "config.yaml", "requirements.txt", "run_app.py", "logo.png",
         "rag", "ui", "services", "scripts", "knowledge",
-    ]
+    ])
     for item in includes:
         src = root_dir / item
         dst = app_dir / item
@@ -140,7 +143,7 @@ def build_linux(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir: 
     # 读取版本号
     with open(config_file, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
-    version = config.get("version", "0.8.17")
+    version = config.get("version", "0.18.18")
 
     # ── 4. 创建系统文件和脚本 ──
     print("[4/5] 创建系统文件...")
@@ -221,10 +224,9 @@ def build_linux(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir: 
     if result.returncode != 0:
         print(f"  fpm (.deb) 失败:\n{result.stderr}")
     else:
-        # fpm 输出到当前目录
-        for f in Path(".").glob("knowledge-assistant_*.deb"):
-            shutil.move(str(f), str(dist_dir / f.name))
-            print(f"  .deb 已生成: {dist_dir / f.name}")
+        # fpm 输出到 cwd (dist_dir)，直接用 dist_dir 查找
+        for f in dist_dir.glob("knowledge-assistant_*.deb"):
+            print(f"  .deb 已生成: {f}")
 
     # 构建 .rpm
     rpm_cmd = deb_cmd.copy()
@@ -239,9 +241,8 @@ def build_linux(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir: 
     if result.returncode != 0:
         print(f"  fpm (.rpm) 失败:\n{result.stderr}")
     else:
-        for f in Path(".").glob("knowledge-assistant-*.rpm"):
-            shutil.move(str(f), str(dist_dir / f.name))
-            print(f"  .rpm 已生成: {dist_dir / f.name}")
+        for f in dist_dir.glob("knowledge-assistant-*.rpm"):
+            print(f"  .rpm 已生成: {f}")
 
     # 汇总
     print("\n  Linux 安装包构建完成:")

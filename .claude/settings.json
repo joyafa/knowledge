@@ -12,7 +12,11 @@
       "Bash(git checkout *)",
       "Bash(where makensis *)",
       "Bash(where choco *)",
-      "Bash(where winget *)"
+      "Bash(where winget *)",
+      "Bash(grep -iE '\\\\.env|secret|password|credential|\\\\.key$')",
+      "Bash(git commit -m 'feat: 嵌入向量 L2 归一化 + 配置模型简化 + 健康检查超时保护 *)",
+      "Bash(git commit -m 'docs: 新增项目 Wiki 文档（QoderWork 自动生成） *)",
+      "Bash(grep -iE '^\\\\+.*password|^\\\\+.*secret|^\\\\+.*api_key.*[a-f0-9]{10,}')"
     ]
   }
 }

@@ -31,15 +31,7 @@ if logo.exists():
 
 # 项目模块（rag/ui/services 已通过 hiddenimports 编译进 PYZ，无需作为源码文件打包）
 
-# knowledge/ 初始知识库文档
-knowledge_dir = ROOT / "knowledge"
-if knowledge_dir.exists():
-    datas.append((str(knowledge_dir), "knowledge"))
-
-# data/knowledge/ 已入库的知识库文档
-data_knowledge_dir = ROOT / "data" / "knowledge"
-if data_knowledge_dir.exists():
-    datas.append((str(data_knowledge_dir), "data/knowledge"))
+# knowledge/ 和 data/knowledge/ 不再打包进安装包（部署时通过 ingest 入库）
 
 # ── 复制包元数据（解决 PyInstaller 打包后 importlib.metadata 找不到包信息的问题） ──
 # streamlit 启动时通过 importlib.metadata.version('streamlit') 检查版本，必须包含 dist-info
@@ -134,8 +126,10 @@ hiddenimports = [
     "ui.login",
     "ui.sidebar",
     "ui.chat",
+    "ui.admin",
     "services",
     "services.analytics",
+    "services.auth",
     "services.history",
     "services.knowledge_service",
     "services.rate_limiter",

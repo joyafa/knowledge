@@ -174,7 +174,8 @@ def load_history(username: str) -> list[dict]:
     history_file = get_today_history_file(username)
     if history_file.exists():
         try:
-            return json.loads(history_file.read_text(encoding="utf-8"))
+            data = json.loads(history_file.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("加载历史记录失败 %s: %s", history_file, e)
             return []
@@ -186,7 +187,8 @@ def load_session_history(username: str, session_id: str) -> list[dict]:
     sf = _session_file(username, session_id)
     if sf.exists():
         try:
-            return json.loads(sf.read_text(encoding="utf-8"))
+            data = json.loads(sf.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("加载会话历史失败 %s: %s", sf, e)
             return []
@@ -222,6 +224,8 @@ def save_message(
     if old_file.exists():
         try:
             old_history = json.loads(old_file.read_text(encoding="utf-8"))
+            if not isinstance(old_history, list):
+                old_history = []
         except (json.JSONDecodeError, OSError):
             old_history = []
     old_history.append(msg)
@@ -244,7 +248,8 @@ def load_history_by_date(username: str, date_str: str) -> list[dict]:
     history_file = _user_dir(username) / f"{date_str}.json"
     if history_file.exists():
         try:
-            return json.loads(history_file.read_text(encoding="utf-8"))
+            data = json.loads(history_file.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
         except (json.JSONDecodeError, OSError):
             return []
     return []

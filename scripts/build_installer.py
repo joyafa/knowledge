@@ -58,15 +58,15 @@ def check_dependencies(platforms: list[str]):
     return all_ok
 
 
-def phase_build(platforms: list[str], skip_models: bool = False):
+def phase_build(platforms: list[str], include_models: bool = False):
     """构建阶段：调用平台构建脚本。"""
     DIST_DIR.mkdir(parents=True, exist_ok=True)
 
     if "windows" in platforms:
         print("\n" + "=" * 60)
         print("Phase 1: 构建 Windows 安装包")
-        if skip_models:
-            print("  (跳过模型复制 — 快速调试模式)")
+        if not include_models:
+            print("  (跳过模型复制 — 模型运行时自动下载)")
         print("=" * 60)
         from build_windows import build_windows
         build_windows(
@@ -74,7 +74,7 @@ def phase_build(platforms: list[str], skip_models: bool = False):
             cache_dir=ROOT_DIR / "build_cache",
             dist_dir=DIST_DIR,
             installer_dir=INSTALLER_DIR,
-            skip_models=skip_models,
+            skip_models=not include_models,
         )
 
     if "linux" in platforms:
@@ -94,8 +94,8 @@ def main():
     parser = argparse.ArgumentParser(description="构建离线安装包（PyInstaller 版本）")
     parser.add_argument("--platform", choices=["windows", "linux", "both"],
                         default="windows", help="目标平台（默认 windows）")
-    parser.add_argument("--skip-models", action="store_true",
-                        help="跳过模型文件复制，加速调试构建")
+    parser.add_argument("--include-models", action="store_true",
+                        help="将模型文件也打包进安装包（默认不打包，运行时自动下载）")
     args = parser.parse_args()
 
     platforms = ["windows", "linux"] if args.platform == "both" else [args.platform]
@@ -112,7 +112,7 @@ def main():
     sys.path.insert(0, str(SCRIPTS_DIR))
 
     # 直接构建（无需下载资源——PyInstaller 已包含所有依赖，模型运行时自动下载）
-    phase_build(platforms, skip_models=args.skip_models)
+    phase_build(platforms, include_models=args.include_models)
 
     print("\n" + "=" * 60)
     print("构建完成！输出目录: dist/")

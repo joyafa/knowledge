@@ -193,6 +193,11 @@ def load_documents(
         if not text.strip():
             continue
 
+        # 跳过内容过短的文件（只有标题和时间戳的空壳文档）
+        if len(text.strip()) < 100:
+            logger.debug("跳过内容过短的文件: %s", doc_file)
+            continue
+
         title = _extract_title(text)
         if not title:
             title = doc_file.stem

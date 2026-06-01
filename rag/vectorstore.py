@@ -95,7 +95,7 @@ class VectorStore:
         logger.info("切换到集合: %s", collection_name)
 
     def add_documents(self, chunks: list[DocumentChunk]) -> int:
-        """将文档分块添加到向量库。"""
+        """将文档分块批量添加到向量库（自动分批，避免超 ChromaDB 上限）。"""
         if not chunks:
             return 0
 
@@ -110,14 +110,27 @@ class VectorStore:
             documents.append(chunk.content)
             metadatas.append(chunk.metadata)
 
-        # 先删除已存在的同名文档（支持增量更新）
-        existing = collection.get(ids=ids)
-        if existing["ids"]:
-            collection.delete(ids=existing["ids"])
+        # 先删除已存在的同名文档（支持增量更新），分批删除避免超限
+        _BATCH_DEL = 5000
+        for i in range(0, len(ids), _BATCH_DEL):
+            batch_ids = ids[i:i + _BATCH_DEL]
+            existing = collection.get(ids=batch_ids)
+            if existing["ids"]:
+                collection.delete(ids=existing["ids"])
 
-        collection.add(ids=ids, documents=documents, metadatas=metadatas)
-        logger.info("向量库入库: %d 个文档块", len(ids))
-        return len(ids)
+        # 分批入库，避免超出 ChromaDB 单次最大 batch size (默认 5461)
+        _BATCH_SIZE = 4000
+        total = 0
+        for i in range(0, len(ids), _BATCH_SIZE):
+            batch_ids = ids[i:i + _BATCH_SIZE]
+            batch_docs = documents[i:i + _BATCH_SIZE]
+            batch_meta = metadatas[i:i + _BATCH_SIZE]
+            collection.add(ids=batch_ids, documents=batch_docs, metadatas=batch_meta)
+            total += len(batch_ids)
+            logger.debug("向量库入库进度: %d/%d", total, len(ids))
+
+        logger.info("向量库入库完成: %d 个文档块", total)
+        return total
 
     def remove_document(self, source: str) -> int:
         """按来源路径删除文档的所有分块。"""

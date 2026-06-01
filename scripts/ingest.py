@@ -8,12 +8,16 @@ import os
 import sys
 from pathlib import Path
 
+# 将项目根目录添加到 Python 路径
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# 先检测本地模型路径，再决定是否需要 HF 镜像
+from rag.config import detect_local_models
+detect_local_models()
+
 # 仅在未配置本地模型路径时才设置 HF 镜像（本地模型就绪时无需联网）
 if not (os.environ.get("EMBEDDING_LOCAL_PATH") and os.environ.get("RERANKER_LOCAL_PATH")):
     os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-
-# 将项目根目录添加到 Python 路径
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from rag.loader import load_documents
 from rag.vectorstore import VectorStore

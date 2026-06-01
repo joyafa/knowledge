@@ -84,14 +84,11 @@ def build_windows(root_dir: Path, cache_dir: Path, dist_dir: Path, installer_dir
     print("[2/4] 修复数据文件位置...")
     internal_dir = pyinstaller_output / "_internal"
     # rag/ui/services 源码已编译进 PYZ，此处仅复制运行时必需的纯数据文件
-    for item in ["app.py", "config.yaml", "logo.png", "knowledge", "data"]:
+    for item in ["app.py", "config.yaml", "logo.png"]:
         src = internal_dir / item
         dst = pyinstaller_output / item
         if src.exists() and not dst.exists():
-            if src.is_dir():
-                shutil.copytree(src, dst)
-            else:
-                shutil.copy2(src, dst)
+            shutil.copy2(src, dst)
             print(f"  已复制: {item}")
 
     # 复制本地模型（如果有）

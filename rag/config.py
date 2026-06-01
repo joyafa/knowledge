@@ -44,6 +44,13 @@ def _resolve_dict(obj):
 
 # ── 本地模型检测 ──
 
+# 模型权重文件名（任一存在即视为有效模型）
+_MODEL_WEIGHT_FILES = (
+    "pytorch_model.bin", "model.safetensors", "tf_model.h5",
+    "model.ckpt.index", "model.ckpt.data-00000-of-00001",
+)
+
+
 def detect_local_models(model_root: str = None) -> None:
     """检测本地模型并设置 EMBEDDING_LOCAL_PATH / RERANKER_LOCAL_PATH 环境变量。
 
@@ -52,7 +59,7 @@ def detect_local_models(model_root: str = None) -> None:
       2) HuggingFace 缓存：model/models--*--*/snapshots/<hash>/
 
     应在 app 启动早期调用，确保 config.yaml 中的 ${VAR:-} 占位符能正确解析。
-    幂等调用：已有环境变量时不覆盖。
+    幂等调用：已有有效环境变量时不覆盖；但若现有值指向无效路径则重新检测。
     """
     import logging
     _logger = logging.getLogger(__name__)
@@ -60,6 +67,16 @@ def detect_local_models(model_root: str = None) -> None:
     if model_root is None:
         model_root = os.environ.get("MODEL_ROOT", "model")
     root = Path(model_root).resolve()
+
+    def _is_valid_model(path: str) -> bool:
+        """校验路径是否包含完整的模型文件（config.json + 权重）。"""
+        p = Path(path)
+        if not p.is_dir():
+            return False
+        cfg = p / "config.json"
+        if not cfg.exists():
+            return False
+        return any((p / f).exists() for f in _MODEL_WEIGHT_FILES)
 
     def _find_snapshot(cache_name: str, flat_name: str) -> str:
         # 1) 扁平目录
@@ -79,17 +96,17 @@ def detect_local_models(model_root: str = None) -> None:
             )
             for snap in snapshot_dirs:
                 cfg = snap / "config.json"
-                has_weights = any(
-                    (snap / f).exists()
-                    for f in ("pytorch_model.bin", "model.safetensors", "tf_model.h5")
-                )
+                has_weights = any((snap / f).exists() for f in _MODEL_WEIGHT_FILES)
                 if cfg.exists() and has_weights:
                     return str(snap)
 
         return ""
 
     # Embedding 模型
-    if not os.environ.get("EMBEDDING_LOCAL_PATH"):
+    existing_emb = os.environ.get("EMBEDDING_LOCAL_PATH", "")
+    if not existing_emb or not _is_valid_model(existing_emb):
+        if existing_emb:
+            _logger.debug("Embedding 路径失效，重新检测: %s", existing_emb)
         emb_path = _find_snapshot(
             "models--shibing624--text2vec-base-chinese", "text2vec-base-chinese"
         )
@@ -98,7 +115,10 @@ def detect_local_models(model_root: str = None) -> None:
             _logger.debug("检测到本地 Embedding 模型: %s", emb_path)
 
     # Reranker 模型
-    if not os.environ.get("RERANKER_LOCAL_PATH"):
+    existing_rer = os.environ.get("RERANKER_LOCAL_PATH", "")
+    if not existing_rer or not _is_valid_model(existing_rer):
+        if existing_rer:
+            _logger.debug("Reranker 路径失效，重新检测: %s", existing_rer)
         reranker_path = _find_snapshot(
             "models--BAAI--bge-reranker-base", "bge-reranker-base"
         )
@@ -138,14 +158,14 @@ class VectorStoreConfig(BaseModel):
     persist_directory: str = "./chroma_db"
     collection_name: str = "knowledge_base"
     top_k: int = Field(default=5, ge=1, le=100)
-    distance_threshold: float = Field(default=400.0, ge=0.0)
+    distance_threshold: float = Field(default=2.0, ge=0.0)
 
 
 class KnowledgeConfig(BaseModel):
     """知识库配置。"""
     docs_directory: str = "./knowledge"
-    chunk_size: int = Field(default=500, ge=50, le=10000)
-    chunk_overlap: int = Field(default=50, ge=0, le=1000)
+    chunk_size: int = Field(default=1000, ge=50, le=10000)
+    chunk_overlap: int = Field(default=100, ge=0, le=1000)
 
     @field_validator("chunk_overlap")
     @classmethod

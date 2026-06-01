@@ -40,13 +40,14 @@ vectorstore:
   collection_name: "knowledge_base"
   top_k: 5
   # 距离阈值（平方L2距离，嵌入已L2归一化，范围 [0,4]）
-  # 1.5 对应余弦相似度 ≈ 0.25，低于此值认为不相关
-  distance_threshold: 1.5
+  # 2.0 对应余弦相似度 ≈ 0（即只要不是完全无关就保留），配合 Reranker 精排
+  distance_threshold: 2.0
 
 knowledge:
   docs_directory: "./data/knowledge"
-  chunk_size: 500
-  chunk_overlap: 50
+  # 分块大小（API 文档需要更大分块以包含完整函数说明）
+  chunk_size: 1000
+  chunk_overlap: 100
 
 # 速率限制
 rate_limit:

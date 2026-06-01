@@ -61,7 +61,7 @@ class BM25Retriever:
     """
 
     # 分词器版本——改分词逻辑后递增此值，强制重建索引
-    TOKENIZER_VERSION = 2
+    TOKENIZER_VERSION = 3
 
     def __init__(self, k1: float = 1.5, b: float = 0.75):
         self.k1 = k1
@@ -107,18 +107,24 @@ class BM25Retriever:
         self._built = True
 
     def _tokenize(self, text: str) -> list[str]:
-        """中文分词（jieba）+ 英文/数字提取。"""
+        """中文分词（jieba）+ 英文/数字提取 + camelCase 拆分。"""
         tokens = []
         for word in jieba.lcut(text):
             word = word.strip().lower()
             if not word:
                 continue
             # 包含中文 → 直接作为 token
-            if re.search(r'[\u4e00-\u9fff]', word):
+            if re.search(r'[一-鿿]', word):
                 tokens.append(word)
             else:
                 # 纯英文/数字/混合 → 拆分单词和数字
-                tokens.extend(re.findall(r'[a-zA-Z_]\w*|\d+', word))
+                sub_tokens = re.findall(r'[a-zA-Z_]\w*|\d+', word)
+                tokens.extend(sub_tokens)
+                # camelCase / PascalCase 拆分（TcpConnection → tcp, connection）
+                for tok in sub_tokens:
+                    parts = re.sub(r'([a-z])([A-Z])', r'\1 \2', tok).lower().split()
+                    if len(parts) > 1:
+                        tokens.extend(parts)
         return tokens
 
     def search(self, query: str, top_k: int = 10) -> list[tuple[int, float]]:
@@ -343,9 +349,13 @@ class RAGChain:
             except Exception as e:
                 logger.debug("BM25 检索跳过: %s", e)
 
-        # 融合结果
-        if filtered and bm25_results:
-            fused = reciprocal_rank_fusion(filtered, bm25_results)[:top_k]
+        # 融合结果（优先用 threshold 过滤后的向量结果，否则用原始候选）
+        candidates = filtered if filtered else vector_results
+        if candidates and bm25_results:
+            if not filtered:
+                logger.info("向量结果全被 threshold 过滤，用原始候选与 BM25 融合（%d+%d 条）",
+                            len(vector_results), len(bm25_results))
+            fused = reciprocal_rank_fusion(candidates, bm25_results)[:top_k]
             # 融合后不足 top_k，用 BM25 不在 fused 中的结果补齐
             if len(fused) < top_k:
                 fused_hashes = {_doc_hash(d) for d in fused}
@@ -355,8 +365,11 @@ class RAGChain:
                     if _doc_hash(doc) not in fused_hashes:
                         fused.append(doc)
             return fused
-        elif filtered:
-            return filtered[:top_k]
+        elif candidates:
+            if not filtered:
+                logger.info("BM25 无结果，使用原始向量候选（distance: %.2f-%.2f）",
+                            vector_results[0]["distance"], vector_results[-1]["distance"])
+            return candidates[:top_k]
         elif bm25_results:
             logger.info("向量检索无结果，使用 BM25 兜底（%d 条）", len(bm25_results))
             return bm25_results[:top_k]
@@ -433,12 +446,12 @@ class RAGChain:
         """
         context_parts = []
 
-        # 低置信度时在最前面插入强提醒
+        # 低置信度时插入提示（仅做语气降级，不强制拒绝）
         if low_confidence:
             context_parts.append(
-                "⚠️ 【系统提示】以下知识库内容与用户问题的相关性**较低**（语义距离较大）。"
-                "如果内容确实与问题无关，你必须回复「抱歉，知识库中暂无相关内容，无法回答该问题。」，"
-                "绝对不要自行回答！"
+                "⚠️ 【系统提示】以下知识库内容是从关键词匹配获得的，可能与用户问题不完全对应。"
+                "请仔细判断内容是否与问题相关：如果能找到有用信息就用格式 A 回答；"
+                "如果确实完全无关再用格式 B。"
             )
 
         used_tokens = self._estimate_tokens("\n\n---\n\n".join(context_parts)) if context_parts else 0
@@ -575,15 +588,19 @@ class RAGChain:
             search_results = self._rerank(question, search_results)
 
         budget = self._calc_context_budget(question, history)
-        # 低置信度检测（嵌入已 L2 归一化，平方L2距离范围 [0,4]）
-        # top_distance > 2.0 表示余弦相似度≈0，匹配度接近随机
-        top_distance = search_results[0].get("distance", 999) if search_results else 999
-        low_confidence = top_distance > 2.0  # 归一化后平方L2∈[0,4]，2.0≈余弦相似度0
+        # 低置信度检测：
+        # 仅当检索结果完全没有向量匹配（全部来自 BM25 且无 distance）时才标记低置信度。
+        # Reranker 已做过精排，能留到这里的 result 都是相关的。
+        top_distance = search_results[0].get("distance", -1) if search_results else -1
+        has_vector_match = any(r.get("distance", -1) >= 0 for r in search_results)
+        # 没有任何向量匹配结果 → 纯 BM25 兜底，可能不精确
+        low_confidence = not has_vector_match and len(search_results) <= 2
         context = self._build_context(search_results, budget, low_confidence=low_confidence)
         sources = self._build_sources(search_results)
         messages = self._build_messages(context, question, history)
 
-        logger.info("查询: %s → %d 个文档块", question[:50], len(search_results))
+        logger.info("查询: %s → %d 个文档块 (top_distance=%.3f, has_vector=%s, low_conf=%s)",
+                    question[:50], len(search_results), top_distance, has_vector_match, low_confidence)
 
         yield {"status": "generating", "chunk": ""}
 

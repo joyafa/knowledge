@@ -5,7 +5,8 @@
       "Bash(python scripts/prepare_offline.py)",
       "Bash(python -c \"import app; print\\('语法检查通过'\\)\")",
       "Bash(python -c \"import app; print\\('OK'\\)\")",
-      "Bash(grep -E '^\\\\+.*api_key.*[a-f0-9]{20,}')"
+      "Bash(grep -E '^\\\\+.*api_key.*[a-f0-9]{20,}')",
+      "Bash(python *)"
     ]
   }
 }

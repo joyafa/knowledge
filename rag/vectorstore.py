@@ -2,8 +2,10 @@
 
 提供向量库的初始化、文档添加、相似度检索和持久化功能。
 支持全局单例缓存，避免重复加载 embedding 模型。
+支持基于文件内容哈希的增量更新。
 """
 
+import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +29,15 @@ logger = get_logger(__name__)
 # 全局缓存：避免每次创建新实例时重新加载 embedding 模型
 _cached_vectorstore: Optional["VectorStore"] = None
 _cached_config_key: Optional[str] = None
+
+
+def _compute_file_hash(file_path: str) -> str:
+    """计算文件的 MD5 哈希（用作内容指纹）。"""
+    hasher = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 class VectorStore:
@@ -94,8 +105,13 @@ class VectorStore:
         self._collection = None
         logger.info("切换到集合: %s", collection_name)
 
-    def add_documents(self, chunks: list[DocumentChunk]) -> int:
-        """将文档分块批量添加到向量库（自动分批，避免超 ChromaDB 上限）。"""
+    def add_documents(self, chunks: list[DocumentChunk], file_paths: dict[str, str] = None) -> int:
+        """将文档分块批量添加到向量库（自动分批，避免超 ChromaDB 上限）。
+
+        Args:
+            chunks: 文档分块列表
+            file_paths: {source: absolute_path} 用于计算文件内容哈希（增量模式）
+        """
         if not chunks:
             return 0
 
@@ -104,11 +120,23 @@ class VectorStore:
         documents = []
         metadatas = []
 
+        # 预计算文件哈希（每个文件只读一次，避免每个 chunk 重复计算）
+        hash_cache: dict[str, str] = {}
+        if file_paths:
+            for src, abs_path in file_paths.items():
+                hash_cache[src] = _compute_file_hash(abs_path)
+
         for i, chunk in enumerate(chunks):
             chunk_id = f"{chunk.metadata['source']}_{chunk.metadata['chunk_index']}"
             ids.append(chunk_id)
             documents.append(chunk.content)
-            metadatas.append(chunk.metadata)
+            # 附加文件内容哈希（用于增量检测）
+            meta = dict(chunk.metadata)
+            if hash_cache:
+                src = chunk.metadata.get("source", "")
+                if src in hash_cache:
+                    meta["content_hash"] = hash_cache[src]
+            metadatas.append(meta)
 
         # 先删除已存在的同名文档（支持增量更新），分批删除避免超限
         _BATCH_DEL = 5000
@@ -198,6 +226,61 @@ class VectorStore:
             pass
         self._collection = None
         logger.info("向量库已清空: %s", self._collection_name)
+
+    def _get_all_metadata(self) -> list[dict]:
+        """获取向量库中所有文档的元数据（内部方法，供 get_file_hashes/cleanup_orphans 复用）。"""
+        collection = self._get_collection()
+        all_data = collection.get()
+        return all_data["metadatas"] or []
+
+    def get_file_hashes(self, all_metadata: list[dict] = None) -> dict[str, str]:
+        """获取向量库中所有文件的内容哈希。
+
+        Args:
+            all_metadata: 可选，由调用方传入避免重复调用 collection.get()
+
+        Returns:
+            {source_path: content_hash, ...}
+        """
+        metas = all_metadata if all_metadata is not None else self._get_all_metadata()
+        hashes: dict[str, str] = {}
+        for meta in metas:
+            if meta and "source" in meta and "content_hash" in meta:
+                src = meta["source"]
+                if src not in hashes:
+                    hashes[src] = meta["content_hash"]
+        return hashes
+
+    def cleanup_orphans(self, current_sources: set[str], all_metadata: list[dict] = None) -> int:
+        """清理已从磁盘删除的文件的孤儿分块。
+
+        Args:
+            current_sources: 当前磁盘上存在的 source 集合
+            all_metadata: 可选，由调用方传入避免重复调用 collection.get()
+
+        Returns:
+            删除的分块数
+        """
+        metas = all_metadata if all_metadata is not None else self._get_all_metadata()
+        if not metas:
+            return 0
+
+        orphan_sources = set()
+        for meta in metas:
+            if meta and "source" in meta:
+                src = meta["source"]
+                if src not in current_sources:
+                    orphan_sources.add(src)
+
+        total_deleted = 0
+        for src in orphan_sources:
+            deleted = self.remove_document(src)
+            total_deleted += deleted
+
+        if orphan_sources:
+            logger.info("清理孤儿分块: %d 个文件, %d 个分块",
+                        len(orphan_sources), total_deleted)
+        return total_deleted
 
     @classmethod
     def from_config(cls, config_path: str = "config.yaml") -> "VectorStore":

@@ -872,3 +872,12 @@ data/knowledge/muduo/net/tests/TcpClient_reg2.cc
 data/knowledge/muduo/net/tests/TcpClient_reg3.cc
 data/knowledge/muduo/net/tests/TimerQueue_unittest.cc
 data/knowledge/muduo/net/tests/ZlibStream_unittest.cc
+
+# 虚拟环境
+venv311/
+
+# 编辑器配置
+.obsidian/
+
+# 临时文件
+_t.py

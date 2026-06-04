@@ -1,7 +1,8 @@
 """文档加载与分块模块。
 
 支持格式：Markdown (.md)、纯文本 (.txt)、PDF (.pdf)、
-          C/C++ 源码 (.c, .cc, .cpp, .cxx, .h, .hpp, .hxx)
+          Word (.docx)、PowerPoint (.pptx)、HTML (.html/.htm)、
+          C/C++/Java 源码 (.c/.cc/.cpp/.cxx/.h/.hpp/.hxx/.java)
 递归扫描 knowledge/ 目录，按语义切分，保留元数据。
 """
 
@@ -19,7 +20,8 @@ logger = get_logger(__name__)
 # 支持的文件扩展名
 SUPPORTED_EXTENSIONS = {
     ".md", ".txt", ".pdf",
-    ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx", 
+    ".docx", ".pptx", ".html", ".htm",
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hxx", ".java",
 }
 
 
@@ -122,6 +124,68 @@ def _load_pdf(file_path: Path) -> str:
     return "\n\n".join(pages)
 
 
+def _load_docx(file_path: Path) -> str:
+    """提取 Word (.docx) 文件文本内容。"""
+    try:
+        from docx import Document
+    except ImportError:
+        raise ImportError(
+            "读取 Word 文档需要安装 python-docx，请运行: pip install python-docx"
+        )
+    doc = Document(str(file_path))
+    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+    # 也提取表格中的文本
+    for table in doc.tables:
+        for row in table.rows:
+            row_text = " | ".join(cell.text for cell in row.cells if cell.text.strip())
+            if row_text:
+                paragraphs.append(row_text)
+    return "\n\n".join(paragraphs)
+
+
+def _load_pptx(file_path: Path) -> str:
+    """提取 PowerPoint (.pptx) 文件文本内容。"""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        raise ImportError(
+            "读取 PPT 需要安装 python-pptx，请运行: pip install python-pptx"
+        )
+    prs = Presentation(str(file_path))
+    slides_text = []
+    for i, slide in enumerate(prs.slides, 1):
+        slide_parts = [f"[幻灯片 {i}]\n"]
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                for para in shape.text_frame.paragraphs:
+                    text = para.text.strip()
+                    if text:
+                        slide_parts.append(text)
+            if shape.has_table:
+                table = shape.table
+                for row in table.rows:
+                    row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                    if row_text:
+                        slide_parts.append(row_text)
+        slides_text.append("\n".join(slide_parts))
+    return "\n\n".join(slides_text)
+
+
+def _load_html(file_path: Path) -> str:
+    """提取 HTML 文件纯文本内容。"""
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        raise ImportError(
+            "读取 HTML 需要安装 beautifulsoup4，请运行: pip install beautifulsoup4"
+        )
+    soup = BeautifulSoup(file_path.read_bytes(), "html.parser")
+    # 移除 script 和 style 标签
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    return soup.get_text("\n", strip=True)
+
+
 # 编码探测顺序（中文 Windows 源码常见 GBK/GB2312 编码）
 _TEXT_ENCODINGS = ["utf-8", "gbk", "gb2312", "gb18030", "latin-1"]
 
@@ -144,6 +208,12 @@ def _load_file(file_path: Path) -> str:
 
     if ext == ".pdf":
         return _load_pdf(file_path)
+    elif ext == ".docx":
+        return _load_docx(file_path)
+    elif ext == ".pptx":
+        return _load_pptx(file_path)
+    elif ext in (".html", ".htm"):
+        return _load_html(file_path)
     else:
         return _read_text_file(file_path)
 
@@ -156,13 +226,13 @@ def load_documents(
 ) -> list[DocumentChunk]:
     """扫描目录并加载所有支持的文档文件，返回分块列表。
 
-    支持格式：.md、.txt、.pdf、C/C++ 源码（.c/.cc/.cpp/.cxx/.h/.hpp/.hxx）
+    支持格式：.md、.txt、.pdf、.docx、.pptx、.html、.htm、C/C++/Java 源码
 
     Args:
         docs_dir: 文档目录路径
         chunk_size: 分块最大字符数
         chunk_overlap: 分块重叠字符数
-        file_filter: 可选的文件名集合，仅加载这些文件
+        file_filter: 可选的相对路径集合，仅加载这些文件（支持子目录匹配）
 
     Returns:
         文档分块列表
@@ -181,8 +251,10 @@ def load_documents(
             continue
         if doc_file.name.lower() == "readme.md":
             continue
-        if file_filter is not None and doc_file.name not in file_filter:
-            continue
+        if file_filter is not None:
+            relative_path = str(doc_file.relative_to(docs_path))
+            if relative_path not in file_filter:
+                continue
 
         try:
             text = _load_file(doc_file)
@@ -256,8 +328,10 @@ def get_knowledge_files_meta(docs_dir: str) -> list[dict]:
 
         _icon_map = {
             "pdf": "📕", "txt": "📝", "md": "📘",
+            "docx": "📄", "pptx": "📊", "html": "🌐", "htm": "🌐",
             "c": "⚙️", "cc": "⚙️", "cpp": "⚙️", "cxx": "⚙️",
             "h": "📐", "hpp": "📐", "hxx": "📐",
+            "java": "☕",
         }
         icon = _icon_map.get(doc_file.suffix.lower().lstrip("."), "📄")
         files.append({

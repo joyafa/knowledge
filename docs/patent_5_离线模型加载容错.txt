@@ -1,0 +1,112 @@
+================================================================================
+                        专利交底书
+================================================================================
+
+【发明名称】
+一种离线优先的RAG系统深度学习模型自适应加载与分级降级容错方法
+
+【技术领域】
+本发明涉及深度学习模型部署与容错技术领域，具体涉及一种面向 RAG 系统
+中 sentence-transformers embedding 模型和 Cross-Encoder reranker 模型
+的离线优先加载方法，支持在线/离线双模式自适应切换，并具备模型完整性
+校验、加载失败熔断和功能分级降级能力。
+
+【背景技术】
+企业级 RAG 系统通常依赖多个深度学习模型：
+- Embedding 模型（如 text2vec-base-chinese）：将文档/查询文本转为向量；
+- Reranker 模型（如 bge-reranker-base）：对检索结果进行精排。
+
+这些模型通常从 HuggingFace Hub 在线下载，但在以下场景中存在严重问题：
+
+1) 离线/内网部署：企业服务器可能无法访问 HuggingFace，导致模型下载
+   失败，整个 RAG 系统无法启动，而非优雅降级；
+2) 模型缓存不完整：HuggingFace 本地缓存可能缺少 config.json 或
+   pytorch_model.bin 等关键文件，加载时会抛出难以诊断的错误；
+3) 单点故障级联：若 reranker 模型加载失败，常见做法是直接让系统崩溃，
+   而非自动降级为无精排模式继续服务；
+4) 缺乏路径有效性校验：仅检查目录存在性，不验证关键模型文件完整性，
+   导致运行时才暴露问题。
+
+【发明内容】
+本发明提出一种离线优先的 RAG 模型自适应加载与分级降级容错方法，核心
+思想是：在系统启动阶段，按"本地完整性校验→离线优先加载→在线兜底→
+加载失败熔断与降级"的分级策略处理模型加载，确保系统在任何网络环境
+和模型可用性条件下均能最大程度可用。
+
+技术方案包括以下步骤：
+
+S1）本地模型路径自动检测（detect_local_models）：
+    S1.1）扫描预定义的模型根目录（model_root），检测 embedding 和
+          reranker 模型的本地路径是否存在；
+    S1.2）对候选路径执行完整性校验：逐一检查目录下是否存在关键文件
+          （config.json、pytorch_model.bin 或 model.safetensors、
+          tokenizer.json 等），路径不存在或关键文件缺失则视为"本地不可用"；
+    S1.3）若校验通过，设置 EMBEDDING_LOCAL_PATH / RERANKER_LOCAL_PATH
+          环境变量供后续加载使用；若未通过，保持变量为空，进入在线模式；
+
+S2）离线优先加载（embedding 模型）：
+    使用 ChineseEmbeddingFunction 封装 sentence-transformers 加载：
+    - 若 local_path 有效 → 以 local_files_only=True 模式离线加载；
+    - 若 local_path 为空 → 允许从 HF Hub 下载（自动使用 HF_ENDPOINT 镜像）；
+    - 加载时设置 trust_remote_code=False，防范供应链风险；
+
+S3）Reranker 模型预热与熔断（模型级容错）：
+    S3.1）Reranker 在 RAGChain 类级别以懒加载方式初始化，避免在系统
+          启动时阻塞，也避免 Streamlit 多线程/多进程环境下重复加载；
+    S3.2）加载时包裹 try-except 熔断逻辑：若模型加载失败（网络不可达、
+          文件损坏、OOM 等），捕获异常并设置 _reranker_disabled 标记；
+    S3.3）后续检索时检查 _reranker_disabled：若为 True，跳过精排阶段，
+          直接使用 RRF 融合结果，系统仍可正常回答问题（功能降级但不断线）；
+
+S4）全局单例缓存（实例级优化）：
+    VectorStore 和 ChineseEmbeddingFunction 均采用全局单例缓存模式：
+    - 相同配置（persist_directory + collection_name + model + local_path）
+      只创建一个实例；
+    - Embedding 模型全局只加载一次，避免内存中同时存在多个模型副本
+      （在 Streamlit 的多 ScriptRunContext 环境下尤其重要）；
+
+S5）Reranker 懒加载 + 类级别缓存：
+    Reranker 模型在 RAGChain 类的 _reranker_model 类属性中缓存，
+    首次调用 _rerank() 时才触发加载，后续请求直接复用。
+
+【有益效果】
+1) 双模式自适应：同一套代码同时支持在线和离线部署，无需修改配置；
+2) 完整性校验前置：启动阶段即发现模型文件缺失，避免运行时报错；
+3) 分级降级不断线：Reranker 不可用时自动退化为 RRF 双路融合结果，
+   核心问答功能不受影响；
+4) 内存高效：全局单例 + 类级别缓存避免模型重复加载；
+5) 安全可控：离线模式设置 local_files_only=True，杜绝意外的网络请求。
+
+【具体实施方式】
+以"诊断软件智能问答系统"的三种部署场景为例：
+
+场景 A：离线 Windows 内网服务器
+  启动 → detect_local_models() →
+    扫描 model/shibing624/text2vec-base-chinese/ → 关键文件齐全 ✓ →
+    扫描 model/BAAI/bge-reranker-base/ → 关键文件齐全 ✓ →
+    设置 EMBEDDING_LOCAL_PATH 和 RERANKER_LOCAL_PATH →
+  ChineseEmbeddingFunction: local_files_only=True 加载 → 成功 →
+  Reranker: 首次查询时 lazy load → 成功 →
+  正常运行，全程无网络请求。
+
+场景 B：开发环境（有网络，无离线模型）
+  启动 → detect_local_models() →
+    model/ 目录为空 → 校验失败 → 不设置环境变量 →
+  ChineseEmbeddingFunction: local_path 为空 → HF_ENDPOINT 镜像下载 →
+  Reranker: 首次查询时从 HF 镜像下载 →
+  首次查询稍慢（下载模型），后续查询正常。
+
+场景 C：离线部署但 reranker 模型文件损坏
+  启动 → detect_local_models() →
+    embedding 模型校验通过 ✓ →
+    reranker 模型校验：pytorch_model.bin 缺失 ✗ →
+    不设置 RERANKER_LOCAL_PATH →
+  Embedding 加载成功 →
+  首次查询触发 Reranker 懒加载 → 捕获异常 → _reranker_disabled = True →
+  系统日志："Reranker 不可用，降级为无精排模式" →
+  问答功能正常（精度略有下降但可用）。
+
+【附图说明】
+图1：离线优先模型加载决策流程图
+图2：模型完整性校验的目录结构检查示意图
+图3：三种部署场景下的功能降级矩阵
